@@ -843,7 +843,7 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
           const lsd = getFrom(b, '["LSD",[],{"token":"', '"}') || b.match(/name="lsd"\s+value="([^"]+)"/)?.[1];
           const form = { av: UID, fb_dtsg, jazoest, lsd, fb_api_caller_class: "RelayModern", fb_api_req_friendly_name: "FBScrapingWarningMutation", variables: "{}", server_timestamps: true, doc_id: 6339492849481770 };
           await post("https://www.facebook.com/api/graphql/", j, form, null, this.options).then(saveCookies(j));
-          logger("Facebook automation warning detected, handling...", "warn");
+          logger("⚠️ Facebook automation detected — bypassing...", "warn");
           this.reconnectAttempts = 0;
         };
         try {
@@ -852,7 +852,7 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
               await bypass(s(resp.data));
               const refreshed = await refreshJar();
               if (isCp(refreshed)) logger("Checkpoint still present after refresh", "warn");
-              else logger("Bypass complete, cookies refreshed", "info");
+              else logger("✅ Bypass complete — session restored.", "info");
               return refreshed;
             }
             return resp;
@@ -861,7 +861,7 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
           if (isCp(first)) {
             await bypass(s(first.data));
             const refreshed = await refreshJar();
-            if (!isCp(refreshed)) logger("Bypass complete, cookies refreshed", "info");
+            if (!isCp(refreshed)) logger("✅ Bypass complete — session restored.", "info");
             else logger("Checkpoint still present after refresh", "warn");
             return refreshed;
           }
@@ -877,11 +877,11 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
       }
       const hydrated = await hydrateJarFromDB(null);
       if (hydrated) {
-        logger("AppState backup live — proceeding to login", "info");
+        logger("🔄 AppState backup found — restoring session...", "info");
         const initial = await get("https://www.facebook.com/", jar, null, globalOptions).then(saveCookies(jar));
         return (await ctx.bypassAutomation(initial, jar)) || initial;
       }
-      logger("AppState expired — proceeding to email/password login", "warn");
+      logger("🔑 AppState expired — logging in with credentials...", "warn");
       return get("https://www.facebook.com/", null, null, globalOptions)
         .then(saveCookies(jar))
         .then(makeLogin(jar, email, password, globalOptions))
@@ -915,16 +915,16 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
             const lsd = getFrom(b, '["LSD",[],{"token":"', '"}') || b.match(/name="lsd"\s+value="([^"]+)"/)?.[1];
             const form = { av: UID, fb_dtsg, jazoest, lsd, fb_api_caller_class: "RelayModern", fb_api_req_friendly_name: "FBScrapingWarningMutation", variables: "{}", server_timestamps: true, doc_id: 6339492849481770 };
             await post("https://www.facebook.com/api/graphql/", j, form, null, this.options).then(saveCookies(j));
-            logger("Facebook automation warning detected, handling...", "warn");
+            logger("⚠️ Facebook automation detected — bypassing...", "warn");
           };
           try {
             if (res && isCp(res)) {
               await bypass(s(res.data));
               const refreshed = await refreshJar();
-              if (!isCp(refreshed)) logger("Bypass complete, cookies refreshed", "info");
+              if (!isCp(refreshed)) logger("✅ Bypass complete — session restored.", "info");
               return refreshed;
             }
-            logger("No checkpoint detected", "info");
+            logger("✅ No checkpoint detected — session is clean.", "info");
             return res;
           } catch {
             return res;
@@ -989,7 +989,7 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
           }
         }
         if (html.includes("/checkpoint/block/?next")) {
-          logger("Appstate die, vui lòng thay cái mới!", "error");
+          logger("💀 Session expired! Please update your appstate.", "error");
           throw new Error("Checkpoint");
         }
         
@@ -1071,7 +1071,7 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
           const userDataMatch = String(html).match(/\["CurrentUserInitialData",\[\],({.*?}),\d+\]/);
           if (userDataMatch) {
             const info = JSON.parse(userDataMatch[1]);
-            logger(`Đăng nhập tài khoản: ${info.NAME} (${info.USER_ID})`, "info");
+            logger(`✅ Logged in as: ${info.NAME} (${info.USER_ID})`, "info");
 
             // Check if Facebook response shows USER_ID = 0 (session dead)
             if (!isValidUID(info.USER_ID)) {
@@ -1120,7 +1120,7 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
               logger(`Database connection failed: ${errorMsg}`, "warn");
             }
           });
-        logger("FCA fix/update by DongDev (Donix-VN)", "info");
+        logger("⚡ fca-eryxenx | Powered by EryXenX | github.com/EryXenX", "info");
         const emitter = new EventEmitter();
         const ctxMain = {
           userID,
@@ -1276,7 +1276,7 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
             });
           }, 86400000);
         }
-        logger("Login successful!");
+        logger("🚀 Login successful! Bot is ready.");
         callback(null, api);
       })
       .catch(function (e) {
