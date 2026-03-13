@@ -1,16 +1,16 @@
-name: Publish FCA to NPM
+name: Publish to NPM
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*.*.*"
 
 jobs:
   publish:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repo
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup Node
@@ -19,10 +19,10 @@ jobs:
           node-version: 18
           registry-url: https://registry.npmjs.org/
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: npm install
 
-      - name: Publish Package
-        run: npm publish --access public
+      - name: Publish package
+        run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
