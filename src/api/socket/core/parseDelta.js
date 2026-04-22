@@ -46,6 +46,22 @@ module.exports = function createParseDelta(deps) {
               userID: d.deltaMessageReaction.userId.toString()
             };
             globalCallback(null, messageReaction);
+          } else if (d.deltaMessageEdit && !!ctx.globalOptions.listenEvents) {
+            try {
+              const edit = d.deltaMessageEdit;
+              const threadKey = edit.threadKey || {};
+              const messageEdit = {
+                type: "message_edit",
+                threadID: (threadKey.threadFbId ? threadKey.threadFbId : threadKey.otherUserFbId || "").toString(),
+                messageID: edit.messageId || "",
+                senderID: (edit.senderId || "").toString(),
+                body: edit.body || "",
+                timestamp: edit.timestamp ? parseInt(edit.timestamp) : Date.now()
+              };
+              globalCallback(null, messageEdit);
+            } catch (err) {
+              logger("parseDelta: deltaMessageEdit error: " + (err && err.message ? err.message : String(err)), "warn");
+            }
           } else if (d.deltaRecallMessageData && !!ctx.globalOptions.listenEvents) {
             const messageUnsend = {
               type: "message_unsend",
