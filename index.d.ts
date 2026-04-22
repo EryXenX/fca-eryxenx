@@ -3,7 +3,7 @@ declare module '@dongdev/fca-unofficial' {
   import type { Duplex, Readable, Transform } from "stream";
 
   // ============================================================================
-  // Type Definitions
+  // Type Definitions -
   // ============================================================================
 
   type ReadableStream = Readable | Duplex | Transform;
