@@ -264,7 +264,7 @@ module.exports = function createParseDelta(deps) {
       case "ForcedFetch": {
         if (!delta.threadKey) return;
         const mid = delta.messageId;
-        const tid = delta.threadKey.threadFbId;
+        const tid = delta.threadKey.threadFbId || delta.threadKey.otherUserFbId;
         if (mid && tid) {
           const form = {
             av: ctx.globalOptions.pageID,
