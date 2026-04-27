@@ -82,7 +82,7 @@ module.exports = function (defaultFuncs, api, ctx, opts) {
         o0: {
           doc_id: "3336396659757871",
           query_params: {
-            limit: 1, before: null, tags: ["INBOX"],
+            limit: 1, before: null, tags: ["INBOX", "PENDING", "OTHER"],
             includeDeliveryReceipts: false, includeSeqID: true
           }
         }
