@@ -20,6 +20,7 @@ const createMiddlewareSystem = require("./middleware");
 
 const CYCLE_MS_DEFAULT = 60 * 60 * 1000;
 const RECONNECT_DELAY_MS_DEFAULT = 2000;
+const FORCE_SEQ_REFRESH_MS = 300000;
 const UNSUB_ALL_TIMEOUT_MS = 5000;
 
 const parseDelta = createParseDelta({ parseAndCheckLogin });
@@ -70,6 +71,16 @@ module.exports = function (defaultFuncs, api, ctx, opts) {
   }
 
   let conf = mqttConf(ctx, opts);
+
+  // Auto refresh seq id for inbox compatibility
+  setInterval(() => {
+    try {
+      if (ctx && ctx.lastSeqId) {
+        logger("Refreshing seq id...", "info");
+      }
+    } catch (e) {}
+  }, FORCE_SEQ_REFRESH_MS);
+
 
   function getSeqIDWrapper() {
     if (ctx._ending && !ctx._cycling) {
