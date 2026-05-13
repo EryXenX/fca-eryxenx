@@ -4,7 +4,7 @@ const logger = require("../../../../func/logger");
 module.exports = function createParseDelta(deps) {
   const { parseAndCheckLogin } = deps;
   return function parseDelta(defaultFuncs, api, ctx, globalCallback, { delta }) {
-    if (delta.class === "NewMessage") {
+    if (["NewMessage","ForcedFetch","UpsertMessage"].includes(delta.class)) {
       const resolveAttachmentUrl = i => {
         if (!delta.attachments || i === delta.attachments.length || getType(delta.attachments) !== "Array") {
           let fmtMsg;
@@ -15,6 +15,11 @@ module.exports = function createParseDelta(deps) {
           }
           if (fmtMsg) {
             if (!ctx.globalOptions.selfListen && fmtMsg.senderID === ctx.userID) return;
+
+// Force support for one-to-one inbox threads
+if (fmtMsg && fmtMsg.threadID) {
+  fmtMsg.isInbox = fmtMsg.threadID.length < 20;
+}
             globalCallback(null, fmtMsg);
           }
         } else {
