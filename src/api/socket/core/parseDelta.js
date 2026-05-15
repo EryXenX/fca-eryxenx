@@ -382,3 +382,12 @@ module.exports = function createParseDelta(deps) {
     }
   };
 };
+
+
+// Stability compatibility patch
+try {
+  if (typeof delta !== "undefined" && delta &&
+      ["ClientPayload","ForcedFetch","UpsertMessage","ThreadSync"].includes(delta.class)) {
+    global.FCA_EXTRA_DELTA = true;
+  }
+} catch (e) {}
