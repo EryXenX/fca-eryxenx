@@ -375,3 +375,14 @@ module.exports = function (defaultFuncs, api, ctx, opts) {
     return msgEmitter;
   };
 };
+
+
+// mqtt stability patch
+try {
+  if (typeof client !== "undefined" && client) {
+    client.on("offline", () => console.log("[FCA] MQTT offline"));
+    client.on("reconnect", () => console.log("[FCA] MQTT reconnecting"));
+    client.on("close", () => console.log("[FCA] MQTT closed"));
+    client.on("error", (e) => console.log("[FCA] MQTT error:", e?.message || e));
+  }
+} catch (e) {}
