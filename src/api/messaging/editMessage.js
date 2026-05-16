@@ -37,7 +37,7 @@ module.exports = function (defaultFuncs, api, ctx) {
       app_id: "2220391788200892",
       payload: JSON.stringify({
         data_trace_id: null,
-        epoch_id: parseInt(generateOfflineThreadingId),
+        epoch_id: parseInt(generateOfflineThreadingId()),
         tasks: [{
           failure_count: null,
           label: "742",
