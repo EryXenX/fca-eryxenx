@@ -33,6 +33,9 @@ function makeGateway(ctx, api, funcs) {
           (e, r) => e ? fail(e) : ok(r && r.body));
       });
     },
+    login: async (appState) => {
+      return { userID: ctx.userID, appState: api.getAppState() };
+    },
     sendMessage: (m, t, cb, rep) => api.sendMessage(m, t, cb, rep),
     sendTypingIndicator: (v, t, cb) => api.sendTypingIndicator && api.sendTypingIndicator(v, t, cb),
     setMessageReaction: (r, m, cb, f) => api.setMessageReaction && api.setMessageReaction(r, m, cb, f),
@@ -127,8 +130,15 @@ class EncryptedChannel {
   }
 
   async boot(sessionFile) {
+    if (this.active) return this;
+    if (this._booting) return this._booting;
     if (!sessionFile) sessionFile = path.join(process.cwd(), ".session", "keys.json");
     try { fs.mkdirSync(path.dirname(sessionFile), { recursive: true }); } catch (_) {}
+    this._booting = this._doBoot(sessionFile);
+    return this._booting;
+  }
+
+  async _doBoot(sessionFile) {
 
     const Engine = loadEngine();
     const gw = makeGateway(this.ctx, this.api, this.funcs);
@@ -161,6 +171,8 @@ class EncryptedChannel {
     this.active = true;
     log("Encrypted channel active.", "info");
     return this;
+  }
+
   }
 
   isActive() { return this.active; }
