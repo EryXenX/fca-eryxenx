@@ -1,6 +1,6 @@
 {
   "name": "fca-eryxenx",
-  "version": "7.0.0",
+  "version": "8.0.0",
   "description": "Facebook Chat API - Modified by EryXenX | Stable, Auto Re-login, Fixed setMessageReaction",
   "main": "index.js",
   "types": "index.d.ts",
@@ -76,7 +76,12 @@
     "sequelize": "^6.37.6",
     "sqlite3": "^5.1.7",
     "totp-generator": "^1.0.0",
-    "ws": "^8.18.1"
+    "ws": "^8.18.1",
+    "@signalapp/libsignal-client": "^0.65.0",
+    "@noble/curves": "^1.4.0",
+    "@noble/hashes": "^1.4.0",
+    "protobufjs": "^7.3.0",
+    "mime": "^3.0.0"
   },
   "devDependencies": {
     "eslint": "^8.50.0",
