@@ -1,5 +1,6 @@
 "use strict";
 const fs = require("fs");
+const { EncryptedChannel } = require("../src/core/channel");
 const path = require("path");
 const EventEmitter = require("events");
 const models = require("../src/database/models");
@@ -1267,6 +1268,21 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
         });
         logger(`Loaded ${loaded} FCA API methods${skipped ? `, skipped ${skipped} duplicates` : ""}`);
         if (api.listenMqtt) api.listen = api.listenMqtt;
+
+        const _ch = new EncryptedChannel(ctxMain, api, defaultFuncs);
+
+        const _baseMqtt = api.listenMqtt;
+        api.listenMqtt = function (cb) {
+          _ch.setHandler(cb);
+          _ch.boot().catch(e => logger("Encrypted channel boot failed: " + e.message, "error"));
+          if (_baseMqtt) return _baseMqtt(cb);
+        };
+        api.listen = api.listenMqtt;
+
+        api.getChannel = function () { return _ch; };
+
+        api.stopChannel = async function () { await _ch.shutdown(); };
+
         if (api.refreshFb_dtsg) {
           setInterval(function () {
             api.refreshFb_dtsg().then(function () {
