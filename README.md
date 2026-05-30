@@ -208,14 +208,18 @@ login(
 
 ---
 
+
+---
+
 ## 🔐 E2EE Support
 
-This package includes end-to-end encrypted messaging support via Signal Protocol + Noise WebSocket.
+End-to-end encrypted messaging support via Signal Protocol + Noise WebSocket.
+Works automatically — no extra setup needed in your bot.
 
 ```javascript
 login({ appState: [] }, (err, api) => {
-  api.listen((err, event) => {
-    // MQTT + E2EE both work here
+  api.listenMqtt((err, event) => {
+    // MQTT and E2EE both arrive here
     // event.isE2EE === true for encrypted messages
     api.sendMessage("Reply!", event.threadID);
   });
@@ -225,7 +229,6 @@ login({ appState: [] }, (err, api) => {
 E2EE engine credit: [@dekuzxc/nexca](https://www.npmjs.com/package/@dekuzxc/nexca)
 
 ---
-
 ## 📄 License
 
 MIT License — see [LICENSE-MIT](./LICENSE-MIT)
