@@ -1,6 +1,6 @@
 "use strict";
 const fs = require("fs");
-const { EncryptedChannel } = require("../src/core/channel");
+const { E2EEBridge } = require("../src/e2ee");
 const path = require("path");
 const EventEmitter = require("events");
 const models = require("../src/database/models");
@@ -1269,28 +1269,21 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
         logger(`Loaded ${loaded} FCA API methods${skipped ? `, skipped ${skipped} duplicates` : ""}`);
         if (api.listenMqtt) api.listen = api.listenMqtt;
 
-        // E2EE setup
-        const _ch = new EncryptedChannel(ctxMain, api, defaultFuncs);
-        api.e2ee = _ch;
-        ctxMain.e2ee = _ch;
-        api.connectE2EE = (sessionFile) => _ch.connect(sessionFile);
-        api.getChannel = () => _ch;
-        api.stopChannel = () => _ch.shutdown();
+        const _e2ee = new E2EEBridge(ctxMain, api, defaultFuncs);
+        api.e2ee = _e2ee;
+        ctxMain.e2ee = _e2ee;
+        api.connectE2EE = (p) => _e2ee.connect(p);
+        api.getE2EE = () => _e2ee;
 
-        // E2EE auto-connect at login time (not waiting for listenMqtt)
-        // GoatBot calls listenMqtt multiple times (restart loop)
-        // so we connect once at login and just update handler on each listenMqtt call
-        _ch.connect().catch(e => logger("E2EE connect failed: " + e.message, "error"));
+        _e2ee.connect().catch(e => logger("E2EE connect failed: " + e.message, "error"));
 
         const _origMqtt = api.listenMqtt;
         api.listenMqtt = function (cb) {
-          // always update E2EE handler — GoatBot restarts listenMqtt periodically
           if (typeof cb === "function") {
-            if (_ch.isActive()) {
-              _ch.setHandler(cb);
+            if (_e2ee.isConnected()) {
+              _e2ee.onMessage(cb);
             } else {
-              // not yet connected — queue it, will be set after connect
-              _ch.connect().then(() => _ch.setHandler(cb))
+              _e2ee.connect().then(() => _e2ee.onMessage(cb))
                 .catch(e => logger("E2EE handler attach failed: " + e.message, "error"));
             }
           }
