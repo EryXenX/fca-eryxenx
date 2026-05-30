@@ -8,11 +8,11 @@ function loadEngine() {
   try {
     return require(path.join(__dirname, "net", "bridge.cjs")).FBClient;
   } catch (e) {
-    throw new Error("FCA secure engine missing at src/core/net/bridge.cjs\n" + e.message);
+    throw new Error("E2EE engine missing at src/core/net/bridge.cjs\n" + e.message);
   }
 }
 
-function makeGateway(ctx, api, funcs) {
+function buildAdapter(ctx, api, funcs) {
   return {
     fb_dtsg: ctx.fb_dtsg,
     getCurrentUserID: () => api.getCurrentUserID ? api.getCurrentUserID() : ctx.userID,
@@ -20,6 +20,7 @@ function makeGateway(ctx, api, funcs) {
     setOptions: () => {},
     listenMqtt: () => {},
     stopListenMqtt: () => {},
+    login: async () => ({ userID: ctx.userID, appState: api.getAppState() }),
     httpPost: async (url, form) => {
       const data = Object.assign({}, form);
       if (!data.fb_dtsg && ctx.fb_dtsg) data.fb_dtsg = ctx.fb_dtsg;
@@ -33,9 +34,6 @@ function makeGateway(ctx, api, funcs) {
           (e, r) => e ? fail(e) : ok(r && r.body));
       });
     },
-    login: async (appState) => {
-      return { userID: ctx.userID, appState: api.getAppState() };
-    },
     sendMessage: (m, t, cb, rep) => api.sendMessage(m, t, cb, rep),
     sendTypingIndicator: (v, t, cb) => api.sendTypingIndicator && api.sendTypingIndicator(v, t, cb),
     setMessageReaction: (r, m, cb, f) => api.setMessageReaction && api.setMessageReaction(r, m, cb, f),
@@ -47,7 +45,7 @@ function makeGateway(ctx, api, funcs) {
   };
 }
 
-function toEvent(msg, ctx) {
+function buildEvent(msg, ctx) {
   const senderID = msg.senderId ||
     (typeof msg.senderJid === "string" ? msg.senderJid.split(".")[0] : "");
 
@@ -127,52 +125,57 @@ class EncryptedChannel {
     this.engine = null;
     this.active = false;
     this._handler = null;
+    this._connectPromise = null;
   }
 
-  async boot(sessionFile) {
+  async connect(sessionFile) {
     if (this.active) return this;
-    if (this._booting) return this._booting;
-    if (!sessionFile) sessionFile = path.join(process.cwd(), ".session", "keys.json");
-    try { fs.mkdirSync(path.dirname(sessionFile), { recursive: true }); } catch (_) {}
-    this._booting = this._doBoot(sessionFile);
-    return this._booting;
-  }
+    if (this._connectPromise) return this._connectPromise;
 
-  async _doBoot(sessionFile) {
+    this._connectPromise = (async () => {
+      if (!sessionFile) sessionFile = path.join(process.cwd(), ".session", "keys.json");
+      try { fs.mkdirSync(path.dirname(sessionFile), { recursive: true }); } catch (_) {}
 
-    const Engine = loadEngine();
-    const gw = makeGateway(this.ctx, this.api, this.funcs);
+      log("E2EE: Connecting...", "info");
 
-    this.engine = new Engine({ appState: this.api.getAppState(), platform: "facebook" });
+      const Engine = loadEngine();
+      const gw = buildAdapter(this.ctx, this.api, this.funcs);
 
-    global._nexcaE2EEAdapter = gw;
-    let uid;
-    try {
-      const r = await this.engine.connect();
-      uid = r && r.userId;
-    } finally {
-      delete global._nexcaE2EEAdapter;
-    }
+      this.engine = new Engine({ appState: this.api.getAppState(), platform: "facebook" });
 
-    if (this.engine.controller) this.engine.controller.api = gw;
+      global._nexcaE2EEAdapter = gw;
+      let uid;
+      try {
+        const r = await this.engine.connect();
+        uid = r && r.userId;
+      } finally {
+        delete global._nexcaE2EEAdapter;
+      }
 
-    await this.engine.connectE2EE(sessionFile, uid || this.ctx.userID);
+      if (this.engine.controller) this.engine.controller.api = gw;
 
-    this.engine.onEvent("e2ee_message", (msg) => {
-      if (this._handler) this._handler(null, toEvent(msg, this.ctx));
-    });
+      log("E2EE: Opening encrypted socket...", "info");
+      await this.engine.connectE2EE(sessionFile, uid || this.ctx.userID);
 
-    this.engine.onEvent("error", (err) => {
-      if (!err) return;
-      if (err.code === 1 || (err.message && err.message.includes("old counter"))) return;
-      log("Channel error: " + (err.message || String(err)), "error");
-    });
+      this.engine.onEvent("e2ee_message", (msg) => {
+        if (!this._handler) return;
+        const ev = buildEvent(msg, this.ctx);
+        if (this.ctx.globalOptions && !this.ctx.globalOptions.selfListen && ev.senderID === this.ctx.userID) return;
+        this._handler(null, ev);
+      });
 
-    this.active = true;
-    log("Encrypted channel active.", "info");
-    return this;
-  }
+      this.engine.onEvent("error", (err) => {
+        if (!err) return;
+        if (err.code === 1 || (err.message && err.message.includes("old counter"))) return;
+        log("E2EE error: " + (err.message || String(err)), "error");
+      });
 
+      this.active = true;
+      log("E2EE: Active — Signal Protocol / Noise WebSocket", "info");
+      return this;
+    })();
+
+    return this._connectPromise;
   }
 
   isActive() { return this.active; }
@@ -180,10 +183,10 @@ class EncryptedChannel {
   setHandler(fn) { this._handler = fn; }
 
   _guard() {
-    if (!this.active || !this.engine) throw new Error("EncryptedChannel not active.");
+    if (!this.active || !this.engine) throw new Error("EncryptedChannel not active. Call connect() first.");
   }
 
-  async sendMsg(threadId, msg, replyTo) {
+  async send(threadId, msg, replyTo) {
     this._guard();
     const text = typeof msg === "string" ? msg : (msg && msg.body != null ? String(msg.body) : "");
     const att = msg && typeof msg === "object" ? (msg.attachment || null) : null;
@@ -236,7 +239,8 @@ class EncryptedChannel {
   async shutdown() {
     if (this.engine) try { await this.engine.disconnect(); } catch (_) {}
     this.active = false;
-    log("Encrypted channel closed.", "info");
+    this._connectPromise = null;
+    log("E2EE: Disconnected.", "info");
   }
 }
 
