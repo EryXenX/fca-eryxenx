@@ -1,6 +1,6 @@
 "use strict";
 const fs = require("fs");
-const { EncryptedChannel } = require("../src/core/channel");
+const { E2EEBridge } = require("../src/e2ee");
 const path = require("path");
 const EventEmitter = require("events");
 const models = require("../src/database/models");
@@ -1269,27 +1269,21 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
         logger(`Loaded ${loaded} FCA API methods${skipped ? `, skipped ${skipped} duplicates` : ""}`);
         if (api.listenMqtt) api.listen = api.listenMqtt;
 
-        // E2EE setup — nexca-style flow
-        const _ch = new EncryptedChannel(ctxMain, api, defaultFuncs);
-        api.e2ee = _ch;
-        ctxMain.e2ee = _ch;
-
-        // connectE2EE: connect the encrypted channel
-        api.connectE2EE = (sessionFile) => _ch.connect(sessionFile);
-        api.getChannel = () => _ch;
-        api.stopChannel = () => _ch.shutdown();
-
-        // listenMqtt wrapper — auto-connects E2EE then pipes both streams to same cb
-        const _origMqtt = api.listenMqtt;
-        api.listenMqtt = function (cb) {
-          // auto-start E2EE in background
-          _ch.connect().then(() => {
-            if (typeof cb === "function") _ch.setHandler(cb);
-          }).catch(e => logger("E2EE connect failed: " + e.message, "error"));
-          // start MQTT as normal
-          return _origMqtt ? _origMqtt(cb) : undefined;
+        const _e2ee = new E2EEBridge(ctxMain, api, defaultFuncs);
+        api.e2ee = _e2ee;
+        ctxMain.e2ee = _e2ee;
+        api.connectE2EE = (p) => _e2ee.connect(p);
+        api.getE2EE = () => _e2ee;
+        api.listenE2EE = function (cb) {
+          const mqttResult = api.listenMqtt ? api.listenMqtt(cb) : undefined;
+          if (_e2ee.isConnected()) {
+            _e2ee.onMessage(cb);
+          } else {
+            _e2ee.connect().then(() => _e2ee.onMessage(cb))
+              .catch(e => logger("E2EE connect failed: " + e.message, "error"));
+          }
+          return mqttResult;
         };
-        api.listen = api.listenMqtt;
 
         if (api.refreshFb_dtsg) {
           setInterval(function () {
