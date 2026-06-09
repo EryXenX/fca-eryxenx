@@ -2,9 +2,9 @@
 
 # 💬 fca-eryxenx
 
-**Unofficial Facebook Chat API for Node.js** - Fork of @dongdev/fca-unofficial with bug fixes and improvements
+**Unofficial Facebook Chat API for Node.js** — Fork of @dongdev/fca-unofficial with stability fixes and new features
 
-[Features](#-features) • [Installation](#-installation) • [Quick Start](#-quick-start) • [Documentation](#-documentation)
+[Features](#-features) • [Installation](#-installation) • [Quick Start](#-quick-start) • [MessengerBot](#-messengerbot) • [createFcaClient](#-createfcaclient) • [Documentation](#-documentation)
 
 </div>
 
@@ -12,20 +12,28 @@
 
 ## ⚡ Why fca-eryxenx?
 
-- ✅ `setMessageReaction` — threadID is now **optional** (backward compatible with all GoatBot commands)
-- ✅ Fixed group message handling (parseDelta fix)
-- ✅ Stable session management
-- ✅ Based on [@dongdev/fca-unofficial](https://github.com/dongp06/fca-unofficial) v3.0.31
+- ✅ **Fixed MQTT subscribe race condition** — no more "Connection refused: No subscription existed" crashes
+- ✅ **`isActiveClient()` guard** — stale MQTT client events no longer processed (stops duplicate messages / reconnect loops)
+- ✅ **`connectTimeout` 5s → 12s** — no premature logout on slow networks
+- ✅ **`close`/`disconnect` autoReconnect** — bot now actually reconnects after dropped connections
+- ✅ **`setMessageReaction`** — threadID optional (backward compatible with all GoatBot commands)
+- ✅ **`MessengerBot`** — Discord.js/Telegraf-style event-driven bot class
+- ✅ **`createFcaClient`** — Namespaced facade API (`client.messages`, `client.threads`, etc.)
+- ✅ **`attachThreadInfoRealtimeSync`** — SQLite thread cache kept in sync with realtime events
+- ✅ Based on [@dongdev/fca-unofficial](https://github.com/dongp06/fca-unofficial)
 
 ---
 
 ## ✨ Features
 
-- ✅ **Full Messenger API** - Send messages, files, stickers, and more
-- ✅ **Real-time Events** - Listen to messages, reactions, and thread events
-- ✅ **AppState Support** - Save login state to avoid re-authentication
-- ✅ **MQTT Protocol** - Real-time messaging via MQTT
-- ✅ **TypeScript Support** - Includes TypeScript definitions
+- ✅ **Full Messenger API** — Send messages, files, stickers, reactions, and more
+- ✅ **Real-time MQTT Events** — Messages, reactions, typing, thread events
+- ✅ **MessengerBot** — High-level bot class with middleware pipeline
+- ✅ **createFcaClient** — Domain-grouped namespaced facade
+- ✅ **Thread Cache Sync** — Realtime SQLite cache invalidation
+- ✅ **AppState Support** — Save/restore login state
+- ✅ **TypeScript Definitions** — Full type support via `index.d.ts`
+- ✅ **GoatBot Compatible** — Drop-in replacement
 
 ---
 
@@ -35,121 +43,211 @@
 npm install fca-eryxenx
 ```
 
-**Requirements:**
-- Node.js >= 12.0.0
-- Active Facebook account
+**Requirements:** Node.js >= 12.0.0
 
 ---
 
 ## 🚀 Quick Start
 
-### 1️⃣ Login and Simple Echo Bot
+### Classic style (GoatBot / Mirai compatible)
 
 ```javascript
 const login = require("fca-eryxenx");
 
-login({ appState: [] }, (err, api) => {
+login({ appState: require("./appstate.json") }, (err, api) => {
   if (err) return console.error(err);
-
+  api.setOptions({ listenEvents: true });
   api.listenMqtt((err, event) => {
     if (err) return console.error(err);
-    if (event.type === "message") {
-      api.sendMessage(event.body, event.threadID);
-    }
+    if (event.type === "message") api.sendMessage(event.body, event.threadID);
   });
 });
 ```
 
-### 2️⃣ Send Text Message
+### Promise style
 
 ```javascript
-const login = require("fca-eryxenx");
+const { login } = require("fca-eryxenx");
 
-login({ appState: [] }, (err, api) => {
-  if (err) return console.error("Login Error:", err);
-
-  const yourID = "000000000000000";
-  api.sendMessage("Hey! 👋", yourID, (err) => {
-    if (err) console.error(err);
-    else console.log("✅ Message sent!");
-  });
-});
-```
-
-### 3️⃣ Send File/Image
-
-```javascript
-const login = require("fca-eryxenx");
-const fs = require("fs");
-
-login({ appState: [] }, (err, api) => {
-  if (err) return console.error(err);
-
-  const msg = {
-    body: "Check this out! 📷",
-    attachment: fs.createReadStream(__dirname + "/image.jpg"),
-  };
-  api.sendMessage(msg, "000000000000000");
-});
+const api = await login({ appState: require("./appstate.json") });
+api.listenMqtt((err, event) => { /* ... */ });
 ```
 
 ---
 
-## 📝 Message Types
+## 🤖 MessengerBot
 
-| Type | Usage | Example |
-| --- | --- | --- |
-| **Regular text** | `{ body: "message" }` | `{ body: "Hello!" }` |
-| **Sticker** | `{ sticker: "sticker_id" }` | `{ sticker: "369239263222822" }` |
-| **File/Image** | `{ attachment: fs.createReadStream(path) }` | `{ attachment: fs.createReadStream("image.jpg") }` |
-| **URL** | `{ url: "https://example.com" }` | `{ url: "https://github.com" }` |
-| **Large emoji** | `{ emoji: "👍", emojiSize: "large" }` | `{ emoji: "👍", emojiSize: "large" }` |
+High-level Discord.js/Telegraf-style bot interface.
 
----
-
-## 💾 AppState Management
-
-### Save AppState
+### Basic usage
 
 ```javascript
-const fs = require("fs");
-const login = require("fca-eryxenx");
+const { createMessengerBot } = require("fca-eryxenx");
 
-login({ email: "YOUR_EMAIL", password: "YOUR_PASSWORD" }, (err, api) => {
-  if (err) return console.error(err);
-  fs.writeFileSync("appstate.json", JSON.stringify(api.getAppState(), null, 2));
-  console.log("✅ AppState saved!");
-});
-```
-
-### Use Saved AppState
-
-```javascript
-const fs = require("fs");
-const login = require("fca-eryxenx");
-
-login(
-  { appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) },
-  (err, api) => {
-    if (err) return console.error(err);
-    console.log("✅ Logged in!");
+const bot = await createMessengerBot(
+  { appState: require("./appstate.json") },
+  {
+    listenEvents: true,
+    commandPrefix: "/",
+    stopOnSignals: true
   }
 );
+
+bot.on("messageCreate", (event) => {
+  console.log(`[${event.threadID}] ${event.body}`);
+});
+
+bot.command("ping", async (ctx) => {
+  await ctx.replyAsync("pong 🏓");
+});
+
+bot.hears(/hello/i, async (ctx) => {
+  await ctx.replyAsync("Hi there! 👋");
+});
+
+bot.hears("bye", async (ctx) => {
+  ctx.reply("See you! 👋");
+});
+
+bot.catch((err, ctx) => {
+  console.error("Middleware error:", err);
+});
+```
+
+### MessengerBot Options
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `autoListen` | `boolean` | `true` | Start MQTT automatically after login |
+| `enableComposer` | `boolean` | `true` | Enable middleware pipeline |
+| `commandPrefix` | `string` | `"/"` | Prefix for `command()` matching |
+| `stopOnSignals` | `boolean` | `false` | Auto-stop on SIGINT/SIGTERM |
+| `maxEventListeners` | `number` | `64` | Max EventEmitter listeners (0 = unlimited) |
+
+### Bot Events
+
+| Event | Trigger |
+|-------|---------|
+| `message` / `messageCreate` | Any incoming message |
+| `message_reply` | Reply to a message |
+| `messageReactionAdd` | Reaction added |
+| `messageDelete` | Message unsent |
+| `typingStart` / `typingStop` | Typing indicator |
+| `threadUpdate` | Thread metadata changed |
+| `ready` / `shardReady` | MQTT connected |
+| `raw` / `update` | Every MQTT delta (unfiltered) |
+| `error` | Any error |
+
+### MessengerContext (ctx)
+
+| Property/Method | Description |
+|----------------|-------------|
+| `ctx.text` | Trimmed message body |
+| `ctx.body` | Raw message body |
+| `ctx.threadID` | Thread ID |
+| `ctx.senderID` | Sender user ID |
+| `ctx.messageID` | Message ID |
+| `ctx.event` | Full event object |
+| `ctx.reply(payload)` | Send reply (callback-style) |
+| `ctx.replyAsync(payload)` | Send reply (returns Promise) |
+
+### Lifecycle
+
+```javascript
+await bot.launch({ stopOnSignals: true });
+await bot.stop(); // graceful shutdown
 ```
 
 ---
 
-## 🔄 Auto Login
+## 🎯 createFcaClient
 
-Create `fca-config.json` in your project root:
+Namespaced facade grouping all API methods by domain.
+
+```javascript
+const { createFcaClient } = require("fca-eryxenx");
+
+login({ appState: require("./appstate.json") }, (err, api) => {
+  const client = createFcaClient(api);
+
+  // Messages
+  await client.messages.send("Hello!", threadID);
+  await client.messages.react(":heart:", messageID);
+  await client.messages.markRead(threadID);
+
+  // Threads
+  const info = await client.threads.getInfo(threadID);
+  const list = await client.threads.getList(10);
+  await client.threads.setTitle("New Name", threadID);
+
+  // Users
+  const user = await client.users.getInfo(userID);
+  const friends = await client.users.getFriends();
+
+  // Account
+  const myID = client.account.getCurrentUserID();
+  await client.account.refreshDtsg();
+  await client.account.logout();
+
+  // Realtime
+  const emitter = client.realtime.listen();
+  emitter.on("message", (ev) => console.log(ev));
+});
+```
+
+### Available Namespaces
+
+| Namespace | Methods |
+|-----------|---------|
+| `messages` | `send`, `edit`, `delete`, `unsend`, `get`, `markRead`, `markReadAll`, `markSeen`, `markDelivered`, `typing`, `react`, `shareContact`, `uploadAttachment`, `forwardAttachment` |
+| `threads` | `createGroup`, `getInfo`, `getList`, `getHistory`, `getPictures`, `addUsers`, `removeUser`, `setAdmin`, `setImage`, `setColor`, `setEmoji`, `setNickname`, `createPoll`, `delete`, `mute`, `setTitle`, `search`, `archive`, `handleMessageRequest` |
+| `users` | `getID`, `getInfo`, `getInfoV2`, `getFriends` |
+| `account` | `getCurrentUserID`, `changeAvatar`, `changeBio`, `logout`, `refreshDtsg`, `getAppState`, `getCookies`, `setOptions`, `handleFriendRequest`, `unfriend` |
+| `realtime` | `listen`, `stop`, `stopAsync`, `useMiddleware`, `removeMiddleware` |
+| `http` | `get`, `post`, `postFormData` |
+
+---
+
+## 🔄 Thread Cache Realtime Sync
+
+Keeps SQLite thread cache in sync with realtime MQTT events. Call after login when Sequelize models are available:
+
+```javascript
+const { attachThreadInfoRealtimeSync } = require("fca-eryxenx");
+
+login({ appState: require("./appstate.json") }, (err, api) => {
+  // models = { Thread, User } from your Sequelize setup
+  attachThreadInfoRealtimeSync(ctx, models, logger, api);
+  // Now thread cache auto-updates on: name changes, member add/leave,
+  // admin changes, nicknames, theme/color, approval mode, etc.
+});
+```
+
+---
+
+## 💾 AppState & Auto Login
+
+```javascript
+// Save appState
+const fs = require("fs");
+login({ email: "YOUR_EMAIL", password: "YOUR_PASSWORD" }, (err, api) => {
+  fs.writeFileSync("appstate.json", JSON.stringify(api.getAppState()));
+});
+
+// Use saved appState
+login({ appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) }, (err, api) => {
+  // ...
+});
+```
+
+### fca-config.json (auto login)
 
 ```json
 {
   "autoLogin": true,
   "apiServer": "https://minhdong.site",
-  "apiKey": "",
   "credentials": {
-    "email": "YOUR_EMAIL_OR_PHONE",
+    "email": "YOUR_EMAIL",
     "password": "YOUR_PASSWORD",
     "twofactor": ""
   }
@@ -158,53 +256,22 @@ Create `fca-config.json` in your project root:
 
 ---
 
-## 👂 Listening for Messages
-
-```javascript
-const fs = require("fs");
-const login = require("fca-eryxenx");
-
-login(
-  { appState: JSON.parse(fs.readFileSync("appstate.json", "utf8")) },
-  (err, api) => {
-    if (err) return console.error(err);
-
-    api.setOptions({ listenEvents: true });
-
-    api.listenMqtt((err, event) => {
-      if (err) return console.error(err);
-
-      switch (event.type) {
-        case "message":
-          api.sendMessage(`🤖 BOT: ${event.body}`, event.threadID);
-          break;
-        case "event":
-          console.log("📢 Event:", event);
-          break;
-      }
-    });
-  }
-);
-```
-
----
-
 ## 🎯 API Quick Reference
 
-### 📨 Messaging
-`sendMessage`, `sendTypingIndicator`, `getMessage`, `editMessage`, `deleteMessage`, `unsendMessage`, `setMessageReaction`, `forwardAttachment`, `uploadAttachment`, `createPoll`
+### Messaging
+`sendMessage`, `editMessage`, `deleteMessage`, `unsendMessage`, `setMessageReaction`, `sendTypingIndicator`, `getMessage`, `forwardAttachment`, `uploadAttachment`, `shareContact`, `createPoll`
 
-### 📬 Read Receipt
+### Read Receipts
 `markAsRead`, `markAsReadAll`, `markAsDelivered`, `markAsSeen`
 
-### 👥 Thread Management
-`getThreadInfo`, `getThreadList`, `getThreadHistory`, `deleteThread`, `changeThreadColor`, `changeThreadEmoji`, `changeGroupImage`, `setTitle`, `changeNickname`
+### Thread Management
+`getThreadInfo`, `getThreadList`, `getThreadHistory`, `getThreadPictures`, `deleteThread`, `changeThreadColor`, `changeThreadEmoji`, `changeGroupImage`, `setTitle`, `changeNickname`, `changeAdminStatus`, `addUserToGroup`, `removeUserFromGroup`, `createNewGroup`, `muteThread`, `changeArchivedStatus`, `handleMessageRequest`, `searchForThread`
 
-### 👤 User & Group
-`getUserInfo`, `getFriendsList`, `getCurrentUserID`, `createNewGroup`, `addUserToGroup`, `removeUserFromGroup`, `changeAdminStatus`
+### Users
+`getUserInfo`, `getUserInfoV2`, `getUserID`, `getFriendsList`
 
-### 🔐 Auth & Listening
-`logout`, `getAppState`, `setOptions`, `listenMqtt`
+### Account
+`getCurrentUserID`, `logout`, `getAppState`, `setOptions`, `listenMqtt`, `refreshFb_dtsg`, `changeAvatar`, `changeBio`, `handleFriendRequest`, `unfriend`, `enableAutoSaveAppState`
 
 ---
 
