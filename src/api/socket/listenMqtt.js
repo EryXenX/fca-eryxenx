@@ -1,4 +1,8 @@
 "use strict";
+/**
+ * Socket/MQTT entry: wires getSeqID -> listenMqtt, middleware, stopListening, and post guard.
+ * Exported as the function that attaches listenMqtt + middleware API to the login context.
+ */
 const mqtt = require("mqtt");
 const WebSocket = require("ws");
 const HttpsProxyAgent = require("https-proxy-agent");
@@ -15,7 +19,7 @@ const createEmitAuth = require("./core/emitAuth");
 const createMiddlewareSystem = require("./middleware");
 
 const CYCLE_MS_DEFAULT = 60 * 60 * 1000;
-const RECONNECT_DELAY_MS_DEFAULT = 5000;
+const RECONNECT_DELAY_MS_DEFAULT = 2000;
 const UNSUB_ALL_TIMEOUT_MS = 5000;
 
 const parseDelta = createParseDelta({ parseAndCheckLogin });
@@ -24,7 +28,6 @@ const listenMqtt = createListenMqtt({ WebSocket, mqtt, HttpsProxyAgent, buildStr
 const getSeqIDFactory = createGetSeqID({ parseAndCheckLogin, listenMqtt, logger, emitAuth });
 
 const MQTT_DEFAULTS = { cycleMs: CYCLE_MS_DEFAULT, reconnectDelayMs: RECONNECT_DELAY_MS_DEFAULT, autoReconnect: true, reconnectAfterStop: false };
-
 function mqttConf(ctx, overrides) {
   ctx._mqttOpt = Object.assign({}, MQTT_DEFAULTS, ctx._mqttOpt || {}, overrides || {});
   if (typeof ctx._mqttOpt.autoReconnect === "boolean") ctx.globalOptions.autoReconnect = ctx._mqttOpt.autoReconnect;
@@ -35,6 +38,7 @@ module.exports = function (defaultFuncs, api, ctx, opts) {
   const identity = function () { };
   let globalCallback = identity;
 
+  // Initialize middleware system if not already initialized
   if (!ctx._middleware) {
     ctx._middleware = createMiddlewareSystem();
   }
@@ -49,8 +53,13 @@ module.exports = function (defaultFuncs, api, ctx, opts) {
       return rawPost(...args).catch(err => {
         const msg = (err && err.error) || (err && err.message) || String(err || "");
         if (/Not logged in|blocked the login/i.test(msg)) {
-          emitAuth(ctx, api, globalCallback,
-            /blocked/i.test(msg) ? "login_blocked" : "not_logged_in", msg);
+          emitAuth(
+            ctx,
+            api,
+            globalCallback,
+            /blocked/i.test(msg) ? "login_blocked" : "not_logged_in",
+            msg
+          );
         }
         throw err;
       });
@@ -84,18 +93,19 @@ module.exports = function (defaultFuncs, api, ctx, opts) {
       .then(() => {
         logger("mqtt getSeqID done", "info");
         ctx._cycling = false;
-        ctx._reconnectAttempts = 0;
       })
       .catch(e => {
         ctx._cycling = false;
         const errMsg = e && e.message ? e.message : String(e || "Unknown error");
         logger(`mqtt getSeqID error: ${errMsg}`, "error");
-        if (ctx._ending && !ctx._cycling) return;
+        // Don't reconnect if we're ending
+        if (ctx._ending) return;
+        // Retry after delay if autoReconnect is enabled
         if (ctx.globalOptions.autoReconnect) {
           const d = conf.reconnectDelayMs;
           logger(`mqtt getSeqID will retry in ${d}ms`, "warn");
           setTimeout(() => {
-            if (!ctx._ending || ctx._cycling) getSeqIDWrapper();
+            if (!ctx._ending) getSeqIDWrapper();
           }, d);
         }
       });
@@ -144,44 +154,64 @@ module.exports = function (defaultFuncs, api, ctx, opts) {
     });
   }
 
-  function fullReset() {
-    try { if (ctx.mqttClient) ctx.mqttClient.removeAllListeners(); } catch (_) {}
-    ctx.mqttClient = undefined;
-    ctx.lastSeqId = null;
-    ctx.syncToken = undefined;
-    ctx.t_mqttCalled = false;
-    ctx._ending = false;
-    ctx._cycling = false;
-    ctx._reconnectAttempts = 0;
-
-    if (ctx._reconnectTimer) { clearTimeout(ctx._reconnectTimer); ctx._reconnectTimer = null; }
-    if (ctx._rTimeout) { clearTimeout(ctx._rTimeout); ctx._rTimeout = null; }
-
-    if (ctx.tasks && ctx.tasks instanceof Map) ctx.tasks.clear();
-
-    if (ctx._userInfoIntervals && Array.isArray(ctx._userInfoIntervals)) {
-      ctx._userInfoIntervals.forEach(iv => { try { clearInterval(iv); } catch (_) {} });
-      ctx._userInfoIntervals = [];
-    }
-    if (ctx._autoSaveInterval && Array.isArray(ctx._autoSaveInterval)) {
-      ctx._autoSaveInterval.forEach(iv => { try { clearInterval(iv); } catch (_) {} });
-      ctx._autoSaveInterval = [];
-    }
-    if (ctx._scheduler && typeof ctx._scheduler.destroy === "function") {
-      try { ctx._scheduler.destroy(); } catch (_) {}
-      ctx._scheduler = undefined;
-    }
-  }
-
   function endQuietly(next) {
     const finish = () => {
-      fullReset();
+      try {
+        if (ctx.mqttClient) {
+          ctx.mqttClient.removeAllListeners();
+        }
+      } catch (_) { }
+      ctx.mqttClient = undefined;
+      ctx.lastSeqId = null;
+      ctx.syncToken = undefined;
+      ctx.t_mqttCalled = false;
+      ctx._ending = false;
+      ctx._cycling = false;
+      if (ctx._reconnectTimer) {
+        clearTimeout(ctx._reconnectTimer);
+        ctx._reconnectTimer = null;
+      }
+      if (ctx._rTimeout) {
+        clearTimeout(ctx._rTimeout);
+        ctx._rTimeout = null;
+      }
+      // Clean up tasks Map to prevent memory leak
+      if (ctx.tasks && ctx.tasks instanceof Map) {
+        ctx.tasks.clear();
+      }
+      // Clean up userInfo intervals
+      if (ctx._userInfoIntervals && Array.isArray(ctx._userInfoIntervals)) {
+        ctx._userInfoIntervals.forEach(interval => {
+          try {
+            clearInterval(interval);
+          } catch (_) { }
+        });
+        ctx._userInfoIntervals = [];
+      }
+      // Clean up autoSave intervals
+      if (ctx._autoSaveInterval && Array.isArray(ctx._autoSaveInterval)) {
+        ctx._autoSaveInterval.forEach(interval => {
+          try {
+            clearInterval(interval);
+          } catch (_) { }
+        });
+        ctx._autoSaveInterval = [];
+      }
+      // Clean up scheduler
+      if (ctx._scheduler && typeof ctx._scheduler.destroy === "function") {
+        try {
+          ctx._scheduler.destroy();
+        } catch (_) { }
+        ctx._scheduler = undefined;
+      }
       next && next();
     };
     try {
       if (ctx.mqttClient) {
         if (isConnected()) {
-          try { ctx.mqttClient.publish("/browser_close", "{}", { qos: 0 }); } catch (_) {}
+          try {
+            ctx.mqttClient.publish("/browser_close", "{}", { qos: 0 });
+          } catch (_) { }
         }
         ctx.mqttClient.end(true, finish);
       } else finish();
@@ -217,7 +247,11 @@ module.exports = function (defaultFuncs, api, ctx, opts) {
           ctx._autoCycleTimer = null;
           logger("mqtt auto-cycle cleared", "info");
         }
-        if (ctx._reconnectTimer) { clearTimeout(ctx._reconnectTimer); ctx._reconnectTimer = null; }
+
+        if (ctx._reconnectTimer) {
+          clearTimeout(ctx._reconnectTimer);
+          ctx._reconnectTimer = null;
+        }
 
         ctx._ending = true;
         unsubAll(() => endQuietly(() => {
@@ -234,11 +268,14 @@ module.exports = function (defaultFuncs, api, ctx, opts) {
 
     const msgEmitter = new MessageEmitter();
 
+    // Original callback without middleware
     const originalCallback = callback || function (error, message) {
       if (error) { logger("mqtt emit error", "error"); return msgEmitter.emit("error", error); }
       msgEmitter.emit("message", message);
     };
 
+    // Only wrap callback with middleware if middleware exists
+    // If no middleware, use callback directly for better performance
     if (middleware.count > 0) {
       globalCallback = middleware.wrapCallback(originalCallback);
     } else {
@@ -246,13 +283,8 @@ module.exports = function (defaultFuncs, api, ctx, opts) {
     }
 
     conf = mqttConf(ctx, conf);
-    installPostGuard();
 
-    // Full reset before starting to prevent stale state
-    if (ctx._ending && !ctx._cycling) {
-      logger("mqtt listenMqtt: clearing stale _ending state before start", "warn");
-      ctx._ending = false;
-    }
+    installPostGuard();
 
     if (!ctx.firstListen) ctx.lastSeqId = null;
     ctx.syncToken = undefined;
@@ -272,27 +304,35 @@ module.exports = function (defaultFuncs, api, ctx, opts) {
       listenMqtt(defaultFuncs, api, ctx, globalCallback);
     }
 
-    api.stopListening = msgEmitter.stopListening.bind(msgEmitter);
-    api.stopListeningAsync = msgEmitter.stopListeningAsync.bind(msgEmitter);
+    api.stopListening = msgEmitter.stopListening;
+    api.stopListeningAsync = msgEmitter.stopListeningAsync;
 
+    // Store original callback for re-wrapping when middleware is added/removed
     let currentOriginalCallback = originalCallback;
     let currentGlobalCallback = globalCallback;
 
+    // Function to re-wrap callback when middleware changes
     function rewrapCallbackIfNeeded() {
-      if (!ctx.mqttClient || (ctx._ending && !ctx._cycling)) return;
+      if (!ctx.mqttClient || ctx._ending) return; // Not listening or ending
+
       const hasMiddleware = middleware.count > 0;
       const isWrapped = currentGlobalCallback !== currentOriginalCallback;
+
+      // If middleware exists but callback is not wrapped, wrap it
       if (hasMiddleware && !isWrapped) {
         currentGlobalCallback = middleware.wrapCallback(currentOriginalCallback);
         globalCallback = currentGlobalCallback;
         logger("Middleware added - callback re-wrapped", "info");
-      } else if (!hasMiddleware && isWrapped) {
+      }
+      // If no middleware but callback is wrapped, unwrap it
+      else if (!hasMiddleware && isWrapped) {
         currentGlobalCallback = currentOriginalCallback;
         globalCallback = currentGlobalCallback;
         logger("All middleware removed - callback unwrapped", "info");
       }
     }
 
+    // Expose middleware API with re-wrapping support
     api.useMiddleware = function (middlewareFn, fn) {
       const result = middleware.use(middlewareFn, fn);
       rewrapCallbackIfNeeded();
@@ -308,22 +348,26 @@ module.exports = function (defaultFuncs, api, ctx, opts) {
       rewrapCallbackIfNeeded();
       return result;
     };
-    api.listMiddleware = function () { return middleware.list(); };
+    api.listMiddleware = function () {
+      return middleware.list();
+    };
     api.setMiddlewareEnabled = function (name, enabled) {
       const result = middleware.setEnabled(name, enabled);
       rewrapCallbackIfNeeded();
       return result;
     };
-
+    // Avoid crashing on restart: defineProperty throws if already defined and non-configurable.
     const existingMiddlewareCount = Object.getOwnPropertyDescriptor(api, "middlewareCount");
     if (!existingMiddlewareCount) {
       Object.defineProperty(api, "middlewareCount", {
-        configurable: true, enumerable: false,
+        configurable: true,
+        enumerable: false,
         get: function () { return (ctx._middleware && ctx._middleware.count) || 0; }
       });
     } else if (existingMiddlewareCount.configurable) {
       Object.defineProperty(api, "middlewareCount", {
-        configurable: true, enumerable: existingMiddlewareCount.enumerable,
+        configurable: true,
+        enumerable: existingMiddlewareCount.enumerable,
         get: function () { return (ctx._middleware && ctx._middleware.count) || 0; }
       });
     }
