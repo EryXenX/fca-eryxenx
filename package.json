@@ -1,6 +1,6 @@
 {
   "name": "fca-eryxenx",
-  "version": "16.0.0",
+  "version": "20.0.0",
   "description": "Facebook Chat API - Modified by EryXenX | Stable, Auto Re-login, Fixed setMessageReaction",
   "main": "index.js",
   "types": "index.d.ts",
@@ -20,7 +20,8 @@
     "DOCS.md",
     "README.md",
     "LICENSE",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "src/app/"
   ],
   "scripts": {
     "test": "mocha",
