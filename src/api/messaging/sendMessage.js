@@ -1,11 +1,20 @@
+/**
+ * Create by Donix-VN (DongDev)
+ * Don't change credit
+ * Send a message using MQTT.
+ * @param {string} text - The text of the message to send.
+ * @param {string} threadID - The ID of the thread to send the message to.
+ * @param {string} [msgReplace] - Optional. The message ID of the message to replace.
+ * @param {Array<Buffer|Stream>} [attachments] - Optional. The attachments to send with the message.
+ * @param {function} [callback] - Optional. The callback function to call when the message is sent.
+ * @returns {Promise<object>} A promise that resolves with the bodies of the sent message.
+ */
+
 "use strict";
 const log = require("../../../func/logAdapter");
 const { getType } = require("../../utils/format");
 const { isReadableStream } = require("../../utils/constants");
 const { generateOfflineThreadingID } = require("../../utils/format");
-
-const SEND_TIMEOUT_MS = 20000;
-const MAX_PENDING_LISTENERS = 50;
 
 module.exports = function (defaultFuncs, api, ctx) {
   const uploadAttachment = require("./uploadAttachment")(defaultFuncs, api, ctx);
@@ -27,67 +36,31 @@ module.exports = function (defaultFuncs, api, ctx) {
         for (const x of n) walk(x);
       }
     }
-    walk(payload && payload.step);
+    walk(payload?.step);
     return { threadID, messageID };
   }
 
   function publishWithAck(content, text, reqID, callback) {
     return new Promise((resolve, reject) => {
+      // Ensure MQTT client is available before using it
       if (!ctx.mqttClient || typeof ctx.mqttClient.on !== "function" || typeof ctx.mqttClient.publish !== "function") {
-        const err = new Error("MQTT client is not initialized or disconnected");
-        log.error("sendMessage", err.message);
+        const err = new Error("MQTT client is not initialized");
+        log.error("sendMessageMqtt", err);
         callback && callback(err);
         return reject(err);
       }
 
-      if (!ctx.mqttClient.connected) {
-        const err = new Error("MQTT client is not connected, message dropped");
-        log.error("sendMessage", err.message);
-        callback && callback(err);
-        return reject(err);
-      }
-
-      // Prevent listener accumulation
-      const currentListeners = ctx.mqttClient.listenerCount("message");
-      if (currentListeners >= MAX_PENDING_LISTENERS) {
-        const err = new Error(`Too many pending sendMessage listeners (${currentListeners}), possible hang`);
-        log.error("sendMessage", err.message);
-        callback && callback(err);
-        return reject(err);
-      }
-
+      // Remove default max listeners limit to avoid MaxListenersExceededWarning
       if (typeof ctx.mqttClient.setMaxListeners === "function") {
         ctx.mqttClient.setMaxListeners(0);
       }
 
       let done = false;
-      let timeoutHandle = null;
-
       const cleanup = () => {
         if (done) return;
         done = true;
-        if (timeoutHandle) { clearTimeout(timeoutHandle); timeoutHandle = null; }
-        ctx.mqttClient && ctx.mqttClient.removeListener("message", handleRes);
-        ctx.mqttClient && ctx.mqttClient.removeListener("close", handleClose);
-        ctx.mqttClient && ctx.mqttClient.removeListener("error", handleMqttErr);
+        ctx.mqttClient.removeListener("message", handleRes);
       };
-
-      const handleClose = () => {
-        if (done) return;
-        cleanup();
-        const err = new Error("MQTT disconnected while waiting for ACK");
-        callback && callback(err);
-        reject(err);
-      };
-
-      const handleMqttErr = (mqttErr) => {
-        if (done) return;
-        cleanup();
-        const err = new Error(`MQTT error while waiting for ACK: ${mqttErr && mqttErr.message ? mqttErr.message : String(mqttErr)}`);
-        callback && callback(err);
-        reject(err);
-      };
-
       const handleRes = (topic, message) => {
         if (topic !== "/ls_resp") return;
         let jsonMsg;
@@ -104,11 +77,7 @@ module.exports = function (defaultFuncs, api, ctx) {
         callback && callback(undefined, bodies);
         resolve(bodies);
       };
-
       ctx.mqttClient.on("message", handleRes);
-      ctx.mqttClient.once("close", handleClose);
-      ctx.mqttClient.once("error", handleMqttErr);
-
       ctx.mqttClient.publish("/ls_req", JSON.stringify(content), { qos: 1, retain: false }, err => {
         if (err) {
           cleanup();
@@ -116,22 +85,23 @@ module.exports = function (defaultFuncs, api, ctx) {
           reject(err);
         }
       });
-
-      timeoutHandle = setTimeout(() => {
+      setTimeout(() => {
         if (done) return;
         cleanup();
-        const err = { error: "Timeout waiting for message ACK" };
-        log.error("sendMessage", `reqID ${reqID} timed out after ${SEND_TIMEOUT_MS}ms`);
+        const err = { error: "Timeout waiting for ACK" };
         callback && callback(err);
         reject(err);
-      }, SEND_TIMEOUT_MS);
+      }, 15000);
     });
   }
 
   function buildMentionData(msg, baseBody) {
     if (!msg.mentions || !Array.isArray(msg.mentions) || !msg.mentions.length) return null;
     const base = typeof baseBody === "string" ? baseBody : "";
-    const ids = [], offsets = [], lengths = [], types = [];
+    const ids = [];
+    const offsets = [];
+    const lengths = [];
+    const types = [];
     let cursor = 0;
     for (const m of msg.mentions) {
       const raw = String(m.tag || "");
@@ -139,9 +109,16 @@ module.exports = function (defaultFuncs, api, ctx) {
       const start = Number.isInteger(m.fromIndex) ? m.fromIndex : cursor;
       let idx = base.indexOf(raw, start);
       let adj = 0;
-      if (idx === -1) { idx = base.indexOf(name, start); adj = 0; }
-      else { adj = raw.length - name.length; }
-      if (idx < 0) { idx = 0; adj = 0; }
+      if (idx === -1) {
+        idx = base.indexOf(name, start);
+        adj = 0;
+      } else {
+        adj = raw.length - name.length;
+      }
+      if (idx < 0) {
+        idx = 0;
+        adj = 0;
+      }
       const off = idx + adj;
       ids.push(String(m.id || 0));
       offsets.push(off);
@@ -168,21 +145,13 @@ module.exports = function (defaultFuncs, api, ctx) {
     if (typeof threadID === "function") return threadID({ error: "Pass a threadID as a second argument." });
     if (typeof callback === "string" && !replyToMessage) {
       replyToMessage = callback;
-      callback = () => {};
+      callback = () => { };
     }
-    if (typeof callback !== "function") callback = () => {};
+    if (typeof callback !== "function") callback = () => { };
     if (!threadID) {
       const err = { error: "threadID is required" };
       callback(err);
       throw err;
-    }
-
-    // Check MQTT state before attempting send
-    if (!ctx.mqttClient || !ctx.mqttClient.connected) {
-      const err = { error: "MQTT not connected, cannot send message" };
-      log.error("sendMessage", err.error);
-      callback(err);
-      return Promise.reject(err);
     }
 
     const m = coerceMsg(msg);
@@ -208,7 +177,10 @@ module.exports = function (defaultFuncs, api, ctx) {
     const mentionData = buildMentionData(m, baseBody);
     if (mentionData) payload0.mention_data = mentionData;
 
-    if (m.sticker) { payload0.send_type = 2; payload0.sticker_id = m.sticker; }
+    if (m.sticker) {
+      payload0.send_type = 2;
+      payload0.sticker_id = m.sticker;
+    }
 
     if (m.emoji) {
       const size = !isNaN(m.emojiSize) ? Number(m.emojiSize) : emojiSizes[m.emojiSize || "small"] || 1;
@@ -250,8 +222,8 @@ module.exports = function (defaultFuncs, api, ctx) {
         try {
           const files = await uploadAttachment(streams);
           for (const file of files) {
-            const id = file.video_id || file.image_id || file.audio_id || file.file_id || file.gif_id || file.fbid || file.id || file.upload_id;
-            if (id) payload0.attachment_fbids.push(String(id));
+            const key = Object.keys(file)[0];
+            payload0.attachment_fbids.push(file[key]);
           }
         } catch (err) {
           log.error("uploadAttachment", err);
