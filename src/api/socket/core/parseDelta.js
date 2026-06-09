@@ -362,6 +362,9 @@ module.exports = function createParseDelta(deps) {
         if (!ctx.globalOptions.selfListen && formattedEvent.author.toString() === ctx.userID) return;
         if (!ctx.loggedIn) return;
         globalCallback(null, formattedEvent);
+        if (formattedEvent && formattedEvent.type === "event" && formattedEvent.threadID != null && typeof ctx._syncThreadInfoFromEvent === "function") {
+          try { ctx._syncThreadInfoFromEvent(formattedEvent); } catch { }
+        }
         break;
       }
       case "NewMessage": {
@@ -382,12 +385,3 @@ module.exports = function createParseDelta(deps) {
     }
   };
 };
-
-
-// Stability compatibility patch
-try {
-  if (typeof delta !== "undefined" && delta &&
-      ["ClientPayload","ForcedFetch","UpsertMessage","ThreadSync"].includes(delta.class)) {
-    global.FCA_EXTRA_DELTA = true;
-  }
-} catch (e) {}
