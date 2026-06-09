@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [3.1.0] - 2026-06-09
+
+### Fixed (MQTT stability — account safety)
+
+- **`connectMqtt.js`: `isActiveClient()` guard added** — stale/previous MQTT client এর events আর process হবে না। Multiple reconnect race condition বন্ধ।
+- **`connectMqtt.js`: Subscribe → wait SUBACK → then publish** — আগে `topics.forEach(subscribe)` করে immediately publish হতো। Facebook এটাকে invalid sequence ধরে "Connection refused: No subscription existed" দিয়ে socket বন্ধ করত। এখন callback-based subscribe দিয়ে SUBACK পাওয়ার পরেই publish।
+- **`connectMqtt.js`: `connectTimeout` 5000ms → 12000ms** — slow network এ premature timeout থেকে logout বন্ধ।
+- **`connectMqtt.js`: `T_MS_WAIT_TIMEOUT_MS` 5000ms → 8000ms** — slow server response এ needless reconnect cycle বন্ধ।
+- **`connectMqtt.js`: `close`/`disconnect` handlers এ `autoReconnect` যোগ** — আগে close/disconnect এ reconnect হতো না। বট offline হয়ে যেত।
+- **`connectMqtt.js`: Previous client cleanup before new connection** — stale client memory leak বন্ধ।
+- **`connectMqtt.js`: Reconnect jitter (±400ms)** — একসাথে অনেক reconnect storm কমাবে।
+
+---
+
 ## [3.0.29] - 2026-02-22
 
 - Maintenance release (hotfix / version bump).
