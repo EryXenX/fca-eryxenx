@@ -1,6 +1,10 @@
 "use strict";
 
-const generateOfflineThreadingId = require('../utils');
+function generateOfflineThreadingId() {
+  const now = Date.now();
+  const rand = Math.floor(Math.random() * 4294967295);
+  return String((BigInt(now) << BigInt(22)) | BigInt(rand & 0x3FFFFF));
+}
 
 module.exports = function (defaultFuncs, api, ctx) {
   return function editMessage(text, messageID, callback) {
@@ -37,7 +41,7 @@ module.exports = function (defaultFuncs, api, ctx) {
       app_id: "2220391788200892",
       payload: JSON.stringify({
         data_trace_id: null,
-        epoch_id: parseInt(generateOfflineThreadingId),
+        epoch_id: parseInt(generateOfflineThreadingId()),
         tasks: [{
           failure_count: null,
           label: "742",
