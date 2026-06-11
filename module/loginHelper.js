@@ -1276,6 +1276,48 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
             });
           }, 86400000);
         }
+        // ✅ nexca core features register
+        try {
+          const e2eeModule = require("../src/api/socket/e2ee");
+          api.e2ee = new e2eeModule.E2EEBridge(ctxMain, api, defaultFuncs);
+          ctxMain.e2ee = api.e2ee;
+          api.connectE2EE = (deviceStorePath) => api.e2ee.connect(deviceStorePath, ctxMain.userID);
+          api.listenE2EE = require("../src/api/socket/listenE2EE")(defaultFuncs, api, ctxMain);
+        } catch (e) {
+          logger(`E2EE init failed (non-fatal): ${e && e.message ? e.message : String(e)}`, "warn");
+        }
+
+        try {
+          api.sessionGuard = require("../src/api/messaging/sessionGuard")(defaultFuncs, api, ctxMain);
+        } catch (e) {
+          logger(`sessionGuard init failed (non-fatal): ${e && e.message ? e.message : String(e)}`, "warn");
+        }
+
+        try {
+          api.sendBroadcast = require("../src/api/messaging/sendBroadcast")(defaultFuncs, api, ctxMain);
+        } catch (e) {
+          logger(`sendBroadcast init failed (non-fatal): ${e && e.message ? e.message : String(e)}`, "warn");
+        }
+
+        // sendMessage override with nexca version (better MQTT + HTTP fallback)
+        try {
+          const nexcaSendMsg = require("../src/api/socket/sendMessage")(defaultFuncs, api, ctxMain);
+          api.sendMessage = nexcaSendMsg;
+          api.sendMessageMqtt = require("../src/api/socket/sendMessageMqtt")(defaultFuncs, api, ctxMain);
+          api.OldMessage = require("../src/api/socket/OldMessage")(defaultFuncs, api, ctxMain);
+          api.sendMessageDM = (msg, threadID, cb, replyTo) => api.OldMessage(msg, threadID, cb, replyTo, true);
+        } catch (e) {
+          logger(`sendMessage nexca override failed (non-fatal): ${e && e.message ? e.message : String(e)}`, "warn");
+        }
+
+        // listenMqtt override with nexca version (better MQTT stability)
+        try {
+          api.listenMqtt = require("../src/api/socket/listenMqtt")(defaultFuncs, api, ctxMain);
+          api.listen = api.listenMqtt;
+        } catch (e) {
+          logger(`listenMqtt nexca override failed (non-fatal): ${e && e.message ? e.message : String(e)}`, "warn");
+        }
+
         logger("🚀 Login successful! Bot is ready.");
         callback(null, api);
       })
