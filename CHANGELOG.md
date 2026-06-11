@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [4.0.0] - 2026-06-10
+
+### Major — NEXCA Engine Integration
+
+- **MQTT**: nexca v1.4.11 এর `listenMqtt.js` দিয়ে replace — better stability, autoReconnect, jitter
+- **E2EE**: Signal Protocol encrypted conversations support (`api.connectE2EE()`, `api.listenE2EE()`, `api.e2ee.*`)
+- **sessionGuard**: appstate auto-save every 3min, corruption guard, auto-backup (`api.sessionGuard()`)
+- **sendBroadcast**: rate-limited multi-thread broadcast (`api.sendBroadcast(msg, threadIDs, opts)`)
+- **sendMessage**: nexca version (MQTT-first + HTTP fallback, better attachment handling)
+- **OldMessage**: nexca HTTP-only send, `sendMessageDM` shorthand
+- All fca-eryxenx API files preserved (GoatBot compatible signatures)
+- Copyright: fca-eryxenx v4.0.0 by EryXenX
+
+---
+
 ## [3.1.0] - 2026-06-09
 
 ### Fixed (MQTT stability — account safety)
