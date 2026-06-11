@@ -1,4 +1,4 @@
-name: Publish to NPM
+name: Publish to NPM + Deprecate Old Versions
 
 on:
   push:
@@ -19,6 +19,24 @@ jobs:
 
       - run: npm install
 
+      # Get package name + version
+      - name: Get package info
+        id: info
+        run: |
+          echo "NAME=$(node -p \"require('./package.json').name\")" >> $GITHUB_OUTPUT
+          echo "VERSION=$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
+
+      # Publish to npm
       - run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # Deprecate all older versions automatically
+      - name: Deprecate old versions
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          NAME=${{ steps.info.outputs.NAME }}
+          VERSION=${{ steps.info.outputs.VERSION }}
+
+          npm deprecate "$NAME@\"<$VERSION\"" "⚠️ Please use latest version: $VERSION"
