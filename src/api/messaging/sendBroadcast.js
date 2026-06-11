@@ -1,6 +1,6 @@
 "use strict";
 
-var logger = require("../utils/nexca-logger");
+var logger = require("../../utils/nexca-logger");
 
 /**
  * sendBroadcast — Send a message to multiple threads in parallel
