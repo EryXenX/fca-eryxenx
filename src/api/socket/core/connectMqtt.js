@@ -150,9 +150,9 @@ module.exports = function createListenMqtt(deps) {
       };
       const topic = ctx.syncToken ? "/messenger_sync_get_diffs" : "/messenger_sync_create_queue";
       if (ctx.syncToken) { queue.last_seq_id = ctx.lastSeqId; queue.sync_token = ctx.syncToken; }
-      mqttClient.publish(topic, JSON.stringify(queue), { qos: 1, retain: false });
-      mqttClient.publish("/foreground_state", JSON.stringify({ foreground: chatOn }), { qos: 1 });
-      mqttClient.publish("/set_client_settings", JSON.stringify({ make_user_available_when_in_foreground: true }), { qos: 1 });
+      mqttClient.publish(topic, JSON.stringify(queue), { qos: 0, retain: false });
+      mqttClient.publish("/foreground_state", JSON.stringify({ foreground: chatOn }), { qos: 0 });
+      mqttClient.publish("/set_client_settings", JSON.stringify({ make_user_available_when_in_foreground: true }), { qos: 0 });
       const d = (ctx._mqttOpt && ctx._mqttOpt.reconnectDelayMs) || DEFAULT_RECONNECT_DELAY_MS;
       let rTimeout = setTimeout(function () {
         rTimeout = null;
