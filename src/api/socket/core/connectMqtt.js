@@ -6,10 +6,7 @@
 const { formatID } = require("../../../utils/format");
 
 const DEFAULT_RECONNECT_DELAY_MS = 2000;
-/** Wait longer for /t_ms - slow network / server lag easily causes premature reconnect */
-const T_MS_WAIT_TIMEOUT_MS = 8000;
-/** Jitter to reduce reconnect storms when multiple clients / flappy network */
-const RECONNECT_JITTER_MS = 400;
+const T_MS_WAIT_TIMEOUT_MS = 5000;
 
 module.exports = function createListenMqtt(deps) {
   const { WebSocket, mqtt, HttpsProxyAgent, buildStream, buildProxy,
@@ -20,17 +17,16 @@ module.exports = function createListenMqtt(deps) {
 
     function scheduleReconnect(delayMs) {
       const d = (ctx._mqttOpt && ctx._mqttOpt.reconnectDelayMs) || DEFAULT_RECONNECT_DELAY_MS;
-      const base = typeof delayMs === "number" ? delayMs : d;
-      const ms = base + Math.floor(Math.random() * RECONNECT_JITTER_MS);
+      const ms = typeof delayMs === "number" ? delayMs : d;
       if (ctx._reconnectTimer) {
         logger("mqtt reconnect already scheduled", "warn");
-        return;
+        return; // debounce
       }
       if (ctx._ending) {
         logger("mqtt reconnect skipped - ending", "warn");
         return;
       }
-      logger(`mqtt will reconnect in ~${ms}ms`, "warn");
+      logger(`mqtt will reconnect in ${ms}ms`, "warn");
       ctx._reconnectTimer = setTimeout(() => {
         ctx._reconnectTimer = null;
         if (!ctx._ending) {
@@ -38,31 +34,8 @@ module.exports = function createListenMqtt(deps) {
         }
       }, ms);
     }
-
-    function isActiveClient(client) {
-      return ctx.mqttClient === client && !ctx._ending;
-    }
-
-    // Cancel any pending reconnect timer - about to open a new connection
-    if (ctx._reconnectTimer) {
-      clearTimeout(ctx._reconnectTimer);
-      ctx._reconnectTimer = null;
-    }
-
-    if (ctx._rTimeout) {
-      try { clearTimeout(ctx._rTimeout); } catch { }
-      ctx._rTimeout = null;
-    }
-    try { delete ctx.tmsWait; } catch { }
-
-    // Clean up previous client before creating a new one
-    const prev = ctx.mqttClient;
-    if (prev) {
-      try { prev.removeAllListeners(); } catch { }
-      try {
-        if (prev.connected) prev.end(true);
-      } catch { }
-      if (ctx.mqttClient === prev) ctx.mqttClient = undefined;
+    function isEndingLikeError(msg) {
+      return /No subscription existed|client disconnecting|socket hang up|ECONNRESET/i.test(msg || "");
     }
 
     const chatOn = ctx.globalOptions.online;
@@ -108,7 +81,7 @@ module.exports = function createListenMqtt(deps) {
       keepalive: 30,
       reschedulePings: true,
       reconnectPeriod: 0,
-      connectTimeout: 12000
+      connectTimeout: 5000
     };
     if (ctx.globalOptions.proxy !== undefined) {
       const agent = new HttpsProxyAgent(ctx.globalOptions.proxy);
@@ -122,33 +95,39 @@ module.exports = function createListenMqtt(deps) {
     const mqttClient = ctx.mqttClient;
 
     mqttClient.on("error", function (err) {
-      if (!isActiveClient(mqttClient)) return;
-
       const msg = String(err && err.message ? err.message : err || "");
       if ((ctx._ending || ctx._cycling) && /No subscription existed|client disconnecting/i.test(msg)) {
         logger(`mqtt expected during shutdown: ${msg}`, "info");
         return;
       }
 
+      if (/Invalid header flag bits|must be 0x0 for puback/i.test(msg)) {
+        logger(`mqtt puback ignored: ${msg}`, "warn");
+        return;
+      }
+
       if (/Not logged in|Not logged in.|blocked the login|401|403/i.test(msg)) {
         try {
-          if (mqttClient && mqttClient.connected) mqttClient.end(true);
+          if (mqttClient && mqttClient.connected) {
+            mqttClient.end(true);
+          }
         } catch (_) { }
         return emitAuth(ctx, api, globalCallback,
           /blocked/i.test(msg) ? "login_blocked" : "not_logged_in",
           msg
         );
       }
-
       logger(`mqtt error: ${msg}`, "error");
       try {
-        if (mqttClient && mqttClient.connected) mqttClient.end(true);
+        if (mqttClient && mqttClient.connected) {
+          mqttClient.end(true);
+        }
       } catch (_) { }
       if (ctx._ending || ctx._cycling) return;
 
-      if (ctx.globalOptions.autoReconnect && !ctx._ending && isActiveClient(mqttClient)) {
+      if (ctx.globalOptions.autoReconnect && !ctx._ending) {
         const d = (ctx._mqttOpt && ctx._mqttOpt.reconnectDelayMs) || DEFAULT_RECONNECT_DELAY_MS;
-        logger(`mqtt autoReconnect listenMqtt() in ~${d}ms`, "warn");
+        logger(`mqtt autoReconnect listenMqtt() in ${d}ms`, "warn");
         scheduleReconnect(d);
       } else {
         globalCallback({ type: "stop_listen", error: msg || "Connection refused" }, null);
@@ -156,85 +135,58 @@ module.exports = function createListenMqtt(deps) {
     });
 
     mqttClient.on("connect", function () {
-      if (!isActiveClient(mqttClient)) return;
-
       if (process.env.OnStatus === undefined) {
-        logger("fca-eryxenx connected", "info");
-        process.env.OnStatus = "true";
+        logger("fca-unofficial", "info");
+        process.env.OnStatus = true;
       }
       ctx._cycling = false;
 
+      topics.forEach(t => mqttClient.subscribe(t));
+
+
+      const queue = {
+        sync_api_version: 11, max_deltas_able_to_process: 100, delta_batch_size: 500,
+        encoding: "JSON", entity_fbid: ctx.userID, initial_titan_sequence_id: ctx.lastSeqId, device_params: null
+      };
+      const topic = ctx.syncToken ? "/messenger_sync_get_diffs" : "/messenger_sync_create_queue";
+      if (ctx.syncToken) { queue.last_seq_id = ctx.lastSeqId; queue.sync_token = ctx.syncToken; }
+      mqttClient.publish(topic, JSON.stringify(queue), { qos: 1, retain: false });
+      mqttClient.publish("/foreground_state", JSON.stringify({ foreground: chatOn }), { qos: 1 });
+      mqttClient.publish("/set_client_settings", JSON.stringify({ make_user_available_when_in_foreground: true }), { qos: 1 });
       const d = (ctx._mqttOpt && ctx._mqttOpt.reconnectDelayMs) || DEFAULT_RECONNECT_DELAY_MS;
-      const topicList = topics.slice();
-
-      /**
-       * Subscribe is async; publish sync BEFORE SUBACK → Facebook returns
-       * "Connection refused: No subscription existed" and closes socket.
-       * Fix: wait for SUBACK callback before publishing.
-       */
-      mqttClient.subscribe(topicList, (subErr) => {
-        if (!isActiveClient(mqttClient)) return;
-
-        if (subErr) {
-          const sm = subErr && subErr.message ? subErr.message : String(subErr);
-          logger(`mqtt subscribe error: ${sm}`, "error");
-          try {
-            if (mqttClient && mqttClient.connected) mqttClient.end(true);
-          } catch (_) { }
-          if (!ctx._ending && !ctx._cycling && ctx.globalOptions.autoReconnect && isActiveClient(mqttClient)) {
-            scheduleReconnect(d);
-          }
+      let rTimeout = setTimeout(function () {
+        rTimeout = null;
+        if (ctx._ending) {
+          logger("mqtt t_ms timeout skipped - ending", "warn");
           return;
         }
+        logger(`mqtt t_ms timeout, cycling in ${d}ms`, "warn");
+        try {
+          if (mqttClient && mqttClient.connected) {
+            mqttClient.end(true);
+          }
+        } catch (_) { }
+        scheduleReconnect(d);
+      }, T_MS_WAIT_TIMEOUT_MS);
 
-        if (!isActiveClient(mqttClient) || !mqttClient.connected) return;
+      // Store timeout reference for cleanup
+      ctx._rTimeout = rTimeout;
 
-        const queue = {
-          sync_api_version: 11, max_deltas_able_to_process: 100, delta_batch_size: 500,
-          encoding: "JSON", entity_fbid: ctx.userID, initial_titan_sequence_id: ctx.lastSeqId, device_params: null
-        };
-        const topic = ctx.syncToken ? "/messenger_sync_get_diffs" : "/messenger_sync_create_queue";
-        if (ctx.syncToken) {
-          queue.last_seq_id = ctx.lastSeqId;
-          queue.sync_token = ctx.syncToken;
-        }
-        mqttClient.publish(topic, JSON.stringify(queue), { qos: 1, retain: false });
-        mqttClient.publish("/foreground_state", JSON.stringify({ foreground: chatOn }), { qos: 1 });
-        mqttClient.publish("/set_client_settings", JSON.stringify({ make_user_available_when_in_foreground: true }), { qos: 1 });
-
-        let rTimeout = setTimeout(function () {
+      ctx.tmsWait = function () {
+        if (rTimeout) {
+          clearTimeout(rTimeout);
           rTimeout = null;
-          if (ctx._ending) {
-            logger("mqtt t_ms timeout skipped - ending", "warn");
-            return;
-          }
-          if (!isActiveClient(mqttClient)) return;
-
-          logger(`mqtt t_ms timeout, cycling in ~${d}ms`, "warn");
-          try {
-            if (mqttClient && mqttClient.connected) mqttClient.end(true);
-          } catch (_) { }
-          if (ctx.globalOptions.autoReconnect && !ctx._ending) {
-            scheduleReconnect(d);
-          }
-        }, T_MS_WAIT_TIMEOUT_MS);
-
-        ctx._rTimeout = rTimeout;
-
-        ctx.tmsWait = function () {
-          if (rTimeout) {
-            clearTimeout(rTimeout);
-            rTimeout = null;
-          }
-          if (ctx._rTimeout) delete ctx._rTimeout;
-          if (ctx.globalOptions.emitReady) globalCallback({ type: "ready", error: null });
-          delete ctx.tmsWait;
-        };
-      });
+        }
+        if (ctx._rTimeout) {
+          delete ctx._rTimeout;
+        }
+        if (ctx.globalOptions.emitReady) globalCallback({ type: "ready", error: null });
+        delete ctx.tmsWait;
+      };
     });
 
     mqttClient.on("message", function (topic, message) {
-      if (ctx._ending || ctx.mqttClient !== mqttClient) return;
+      if (ctx._ending) return; // Ignore messages if ending
       try {
         let jsonMessage = Buffer.isBuffer(message) ? Buffer.from(message).toString() : message;
         try {
@@ -288,31 +240,24 @@ module.exports = function createListenMqtt(deps) {
       } catch (ex) {
         const errMsg = ex && ex.message ? ex.message : String(ex || "Unknown error");
         logger(`mqtt message handler error: ${errMsg}`, "error");
+        // Don't crash on message parsing errors, just log and continue
       }
     });
 
     mqttClient.on("close", function () {
-      if (ctx.mqttClient !== mqttClient) return;
       if (ctx._ending || ctx._cycling) {
         logger("mqtt close expected", "info");
         return;
       }
       logger("mqtt connection closed", "warn");
-      if (ctx.globalOptions.autoReconnect && !ctx._ending && !ctx._cycling) {
-        scheduleReconnect();
-      }
     });
 
     mqttClient.on("disconnect", () => {
-      if (ctx.mqttClient !== mqttClient) return;
       if (ctx._ending || ctx._cycling) {
         logger("mqtt disconnect expected", "info");
         return;
       }
       logger("mqtt disconnected", "warn");
-      if (ctx.globalOptions.autoReconnect && !ctx._ending && !ctx._cycling) {
-        scheduleReconnect();
-      }
     });
   };
 };
