@@ -610,7 +610,7 @@ module.exports = function (defaultFuncs, api, ctx) {
         ctx.t_mqttCalled = false;
 
         var form = {
-            av: ctx.globalOptions.pageID,
+            av: ctx.globalOptions.pageID || ctx.userID,
             queries: JSON.stringify({
                 o0: {
                     doc_id: "3336396659757871",
@@ -705,7 +705,7 @@ module.exports = function (defaultFuncs, api, ctx) {
         ctx.syncToken = undefined;
 
         form = {
-            av: ctx.globalOptions.pageID,
+            av: ctx.globalOptions.pageID || ctx.userID,
             queries: JSON.stringify({
                 o0: {
                     doc_id: "3336396659757871",
