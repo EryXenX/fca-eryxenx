@@ -1318,6 +1318,10 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
           logger(`listenMqtt nexca override failed (non-fatal): ${e && e.message ? e.message : String(e)}`, "warn");
         }
 
+        try {
+          const { checkForUpdate } = require("../src/utils/versionCheck");
+          checkForUpdate(logger);
+        } catch (_) {}
         logger("🚀 Login successful! Bot is ready.");
         callback(null, api);
       })
