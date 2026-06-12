@@ -603,7 +603,7 @@ module.exports = function (defaultFuncs, api, ctx) {
 
     getSeqID = function () {
         ctx.t_mqttCalled = false;
-        defaultFuncs.post("https://www.facebook.com/api/graphqlbatch/", ctx.jar, {
+        utils.post("https://www.facebook.com/api/graphqlbatch/", ctx.jar, {
             av: ctx.globalOptions.pageID,
             queries: JSON.stringify({
                 o0: {
