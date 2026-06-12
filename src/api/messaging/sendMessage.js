@@ -78,7 +78,7 @@ module.exports = function (defaultFuncs, api, ctx) {
         resolve(bodies);
       };
       ctx.mqttClient.on("message", handleRes);
-      ctx.mqttClient.publish("/ls_req", JSON.stringify(content), { qos: 1, retain: false }, err => {
+      ctx.mqttClient.publish("/ls_req", JSON.stringify(content), { qos: 0, retain: false }, err => {
         if (err) {
           cleanup();
           callback && callback(err);
@@ -222,8 +222,8 @@ module.exports = function (defaultFuncs, api, ctx) {
         try {
           const files = await uploadAttachment(streams);
           for (const file of files) {
-            const key = Object.keys(file)[0];
-            payload0.attachment_fbids.push(file[key]);
+            const id = file.video_id || file.image_id || file.audio_id || file.file_id || file.gif_id || file.fbid || file.id || file.upload_id;
+            if (id) payload0.attachment_fbids.push(String(id));
           }
         } catch (err) {
           log.error("uploadAttachment", err);
