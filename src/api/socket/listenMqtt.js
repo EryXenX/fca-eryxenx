@@ -601,9 +601,15 @@ function listenMqtt(defaultFuncs, api, ctx, globalCallback) {
 module.exports = function (defaultFuncs, api, ctx) {
     var globalCallback = identity;
 
-    getSeqID = function () {
+    var _getSeqRetryCount = 0;
+    var MAX_SEQ_RETRIES = 3;
+    var SEQ_RETRY_DELAY = 2000;
+
+    function doGetSeqID(retryCount) {
+        retryCount = retryCount || 0;
         ctx.t_mqttCalled = false;
-        utils.post("https://www.facebook.com/api/graphqlbatch/", ctx.jar, {
+
+        var form = {
             av: ctx.globalOptions.pageID,
             queries: JSON.stringify({
                 o0: {
@@ -611,31 +617,61 @@ module.exports = function (defaultFuncs, api, ctx) {
                     query_params: {
                         limit: 1,
                         before: null,
-                        tags: ["INBOX", "OTHER", "PENDING"],
+                        tags: ["INBOX"],
                         includeDeliveryReceipts: false,
                         includeSeqID: true
                     }
                 }
             })
-        })
+        };
+
+        defaultFuncs.post("https://www.facebook.com/api/graphqlbatch/", ctx.jar, form)
             .then(utils.parseAndCheckLogin(ctx, defaultFuncs))
-            .then(resData => {
-                if (!Array.isArray(resData)) throw { error: "Not logged in", res: resData };
-                if (resData[resData.length - 1].error_results > 0) throw resData[0].o0.errors;
-                if (resData[resData.length - 1].successful_results === 0) throw { error: "getSeqId: no successful_results" };
-                var threads = resData[0].o0.data && resData[0].o0.data.viewer && resData[0].o0.data.viewer.message_threads;
-                if (threads && threads.sync_sequence_id) {
-                    ctx.lastSeqId = threads.sync_sequence_id;
+            .then(function(resData) {
+                if (!Array.isArray(resData) || !resData.length) {
+                    throw { error: "Not logged in" };
+                }
+                var lastRes = resData[resData.length - 1];
+                if (lastRes && lastRes.successful_results === 0) return;
+
+                var syncSeqId = resData[0] && resData[0].o0 && resData[0].o0.data &&
+                    resData[0].o0.data.viewer && resData[0].o0.data.viewer.message_threads &&
+                    resData[0].o0.data.viewer.message_threads.sync_sequence_id;
+
+                if (syncSeqId) {
+                    ctx.lastSeqId = syncSeqId;
+                    logger.info("getSeqID", "ok -> listenMqtt()");
                     listenMqtt(defaultFuncs, api, ctx, globalCallback);
                 } else {
                     throw { error: "getSeqId: no sync_sequence_id found." };
                 }
             })
-            .catch(err => {
-                logger.error("getSeqID", err.error || err.message || err);
-                if (err.error === "Not logged in") ctx.loggedIn = false;
+            .catch(function(err) {
+                var msg = (err && err.error) || (err && err.message) || String(err || "");
+                var isAuthErr = /Not logged in|no sync_sequence_id|blocked|401|403/i.test(msg);
+
+                if (isAuthErr && retryCount < MAX_SEQ_RETRIES) {
+                    var delay = SEQ_RETRY_DELAY * (retryCount + 1);
+                    logger.warn("getSeqID", "retry " + (retryCount + 1) + "/" + MAX_SEQ_RETRIES + " after " + delay + "ms");
+                    setTimeout(function() {
+                        // session refresh before retry
+                        utils.get("https://www.facebook.com/", ctx.jar, null, ctx.globalOptions, ctx)
+                            .catch(function() {})
+                            .then(function() {
+                                doGetSeqID(retryCount + 1);
+                            });
+                    }, delay);
+                    return;
+                }
+
+                logger.error("getSeqID", msg);
+                if (err && err.error === "Not logged in") ctx.loggedIn = false;
                 return globalCallback(err, null);
             });
+    }
+
+    getSeqID = function() {
+        doGetSeqID(0);
     };
 
     return function (callback) {
