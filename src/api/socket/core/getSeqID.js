@@ -257,10 +257,11 @@ module.exports = function createGetSeqID(deps) {
         if (syncSeqId) {
           ctx.lastSeqId = syncSeqId;
           logger("mqtt getSeqID ok -> listenMqtt()", "info");
-          listenMqtt(defaultFuncs, api, ctx, globalCallback);
         } else {
-          throw { error: "getSeqId: no sync_sequence_id found." };
+          ctx.lastSeqId = ctx.lastSeqId || 0;
+          logger("getSeqID: sync_sequence_id not found, fallback lastSeqId=" + ctx.lastSeqId, "warn");
         }
+        listenMqtt(defaultFuncs, api, ctx, globalCallback);
       })
       .catch(async err => {
         const detail = (err && err.detail && err.detail.message) ? ` | detail=${err.detail.message}` : "";
