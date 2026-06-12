@@ -1,4 +1,4 @@
-name: Publish to NPM + Deprecate Old Versions
+name: Publish to NPM
 
 on:
   push:
@@ -19,24 +19,25 @@ jobs:
 
       - run: npm install
 
-      # Get package name + version
-      - name: Get package info
-        id: info
+      - name: Check if version already published
+        id: version_check
         run: |
-          echo "NAME=$(node -p \"require('./package.json').name\")" >> $GITHUB_OUTPUT
-          echo "VERSION=$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          NPM_VERSION=$(npm view fca-eryxenx version 2>/dev/null || echo "0.0.0")
+          echo "pkg_version=$PKG_VERSION" >> $GITHUB_OUTPUT
+          echo "npm_version=$NPM_VERSION" >> $GITHUB_OUTPUT
+          if [ "$PKG_VERSION" = "$NPM_VERSION" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
 
-      # Publish to npm
-      - run: npm publish
+      - name: Publish
+        if: steps.version_check.outputs.skip == 'false'
+        run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      # Deprecate all older versions automatically
-      - name: Deprecate old versions
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          NAME=${{ steps.info.outputs.NAME }}
-          VERSION=${{ steps.info.outputs.VERSION }}
-
-          npm deprecate "$NAME@\"<$VERSION\"" "⚠️ Please use latest version: $VERSION"
+      - name: Already published
+        if: steps.version_check.outputs.skip == 'true'
+        run: echo "Version ${{ steps.version_check.outputs.pkg_version }} already on npm, skipping."
