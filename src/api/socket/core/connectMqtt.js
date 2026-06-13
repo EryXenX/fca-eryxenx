@@ -250,6 +250,9 @@ module.exports = function createListenMqtt(deps) {
         return;
       }
       logger("mqtt connection closed", "warn");
+      if (ctx.globalOptions.autoReconnect && !ctx._ending) {
+        scheduleReconnect();
+      }
     });
 
     mqttClient.on("disconnect", () => {
@@ -258,6 +261,9 @@ module.exports = function createListenMqtt(deps) {
         return;
       }
       logger("mqtt disconnected", "warn");
+      if (ctx.globalOptions.autoReconnect && !ctx._ending) {
+        scheduleReconnect();
+      }
     });
   };
 };
