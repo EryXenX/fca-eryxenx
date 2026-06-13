@@ -27,7 +27,7 @@ module.exports = function (defaultFuncs, api, ctx) {
             mark_thread_read: 1,
             text: baseBody === "" ? null : baseBody,
             initiating_source: 0,
-            skip_url_preview_gen: 0,
+            skip_url_preview_gen: 1,
             text_has_links: 0,
             multitab_env: 0
         };
