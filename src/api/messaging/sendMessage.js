@@ -168,7 +168,7 @@ module.exports = function (defaultFuncs, api, ctx) {
       text: baseBody === "" ? null : baseBody,
       initiating_source: 0,
       skip_url_preview_gen: 1,
-      text_has_links: 0,
+      text_has_links: hasLinks(baseBody) ? 1 : 0,
       multitab_env: 0,
       metadata_dataclass: JSON.stringify({ media_accessibility_metadata: { alt_text: null } })
     };
