@@ -16,6 +16,7 @@ module.exports = function (defaultFuncs, api, ctx) {
         ctx.wsTaskNumber = (ctx.wsTaskNumber || 0) + 1;
 
         var baseBody = msg.body != null ? String(msg.body) : "";
+        var hasLinks = typeof baseBody === "string" && /(https?:\/\/|www\.|t\.me\/|fb\.me\/|youtu\.be\/|facebook\.com\/|youtube\.com\/)/i.test(baseBody);
         var requestId = ctx.wsReqNumber;
 
         var payload0 = {
@@ -28,7 +29,7 @@ module.exports = function (defaultFuncs, api, ctx) {
             text: baseBody === "" ? null : baseBody,
             initiating_source: 0,
             skip_url_preview_gen: 1,
-            text_has_links: 0,
+            text_has_links: hasLinks ? 1 : 0,
             multitab_env: 0
         };
 
