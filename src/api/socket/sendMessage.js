@@ -26,17 +26,19 @@ function buildMentionData(msg, baseBody) {
     var ids = [], offsets = [], lengths = [], types = [];
     for (var i = 0; i < msg.mentions.length; i++) {
         var mention = msg.mentions[i];
+        // Ensure tag always has @ prefix — Facebook counts @ in both offset and length
         var tag = String(mention.tag || "");
         if (tag && !tag.startsWith("@")) tag = "@" + tag;
         var fromIndex = Number.isInteger(mention.fromIndex) ? mention.fromIndex : 0;
         var offset = baseBody.indexOf(tag, fromIndex);
         if (offset === -1) {
+            // Fallback: search for bare name without @
             offset = baseBody.indexOf(tag.slice(1), fromIndex);
         }
         if (offset < 0) offset = 0;
         ids.push(String(mention.id || 0));
         offsets.push(offset);
-        lengths.push(tag.length);
+        lengths.push(tag.length);   // includes @ — matches Facebook's expectation
         types.push("p");
     }
     return {
@@ -236,10 +238,22 @@ module.exports = function (defaultFuncs, api, ctx) {
             }
         }
 
+        // Auto-detect isSingleUser from ctx.threadTypes if not explicitly provided.
+        // parseDelta in listenMqtt.js populates ctx.threadTypes[senderID] = 'dm' | 'group'
         if (isSingleUser === undefined && ctx.threadTypes) {
             isSingleUser = ctx.threadTypes[String(threadID)] === 'dm';
         }
 
+        // DM attachment sends — skip MQTT entirely.
+        // For E2EE DMs: route through the E2EE bridge (Noise WebSocket, Signal Protocol).
+        //   Facebook strips attachment_fbids from MQTT messages in E2EE threads
+        //   (can't re-encrypt CDN attachments on the fly), so MQTT silently drops them.
+        //   The vendor's client.sendImage/sendVideo/sendAudio encrypts the file data
+        //   and sends via the Noise WebSocket — the only path that actually delivers
+        //   attachments in E2EE threads.
+        // For non-E2EE DMs: use OldMessage.
+        //   /messaging/send/ with other_user_fbid routing works for plain DMs.
+        //   (For E2EE DMs it returns 404 because the endpoint is deprecated for those.)
         if (isSingleUser && msg.attachment) {
             var useE2EE = api.e2ee && typeof api.e2ee.isConnected === "function" && api.e2ee.isConnected();
             if (useE2EE) {
@@ -276,9 +290,18 @@ module.exports = function (defaultFuncs, api, ctx) {
             if (callback) callback(null, result);
             else resolve(result);
         } catch (mqttErr) {
-            logger.error("sendMessage", mqttErr.message || mqttErr);
-            if (callback) callback(mqttErr);
-            else reject(mqttErr);
+            logger.warn("sendMessage", "MQTT failed, falling back to OldMessage: " + (mqttErr.message || mqttErr));
+            try {
+                var fbResult = await new Promise((res2, rej2) => {
+                    api.OldMessage(msg, threadID, (err2, data2) => err2 ? rej2(err2) : res2(data2), replyToMessage, isSingleUser);
+                });
+                if (callback) callback(null, fbResult);
+                else resolve(fbResult);
+            } catch (fbErr) {
+                logger.error("sendMessage", fbErr.error || fbErr.message || fbErr);
+                if (callback) callback(fbErr);
+                else reject(fbErr);
+            }
         }
 
         return promise;
