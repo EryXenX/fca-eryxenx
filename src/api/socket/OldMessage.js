@@ -115,6 +115,10 @@ module.exports = function (defaultFuncs, api, ctx) {
     return function OldMessage(msg, threadID, callback, replyToMessage, isSingleUser) {
         if (typeof msg === "string") msg = { body: msg };
 
+        if (msg.body && /(https?:\/\/|www\.|t\.me\/|fb\.me\/|youtu\.be\/|facebook\.com\/|youtube\.com\/)/i.test(msg.body)) {
+            return require('./sendMessage')(defaultFuncs, api, ctx)(msg, threadID, callback, replyToMessage, false);
+        }
+
         var resolveFunc = () => { };
         var rejectFunc = () => { };
         var promise = new Promise((res, rej) => { resolveFunc = res; rejectFunc = rej; });
