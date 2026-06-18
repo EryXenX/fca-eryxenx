@@ -26,15 +26,19 @@ function buildMentionData(msg, baseBody) {
     var ids = [], offsets = [], lengths = [], types = [];
     for (var i = 0; i < msg.mentions.length; i++) {
         var mention = msg.mentions[i];
+        // Ensure tag always has @ prefix — Facebook counts @ in both offset and length
         var tag = String(mention.tag || "");
         if (tag && !tag.startsWith("@")) tag = "@" + tag;
         var fromIndex = Number.isInteger(mention.fromIndex) ? mention.fromIndex : 0;
         var offset = baseBody.indexOf(tag, fromIndex);
-        if (offset === -1) offset = baseBody.indexOf(tag.slice(1), fromIndex);
+        if (offset === -1) {
+            // Fallback: search for bare name without @
+            offset = baseBody.indexOf(tag.slice(1), fromIndex);
+        }
         if (offset < 0) offset = 0;
         ids.push(String(mention.id || 0));
         offsets.push(offset);
-        lengths.push(tag.length);
+        lengths.push(tag.length);   // includes @ — matches Facebook's expectation
         types.push("p");
     }
     return {
@@ -64,44 +68,33 @@ function extractIdsFromPayload(payload) {
 
 function publishLsRequestWithAck(mqttClient, content, requestId, timeout) {
     timeout = timeout || 15000;
-    return new Promise(function(resolve, reject) {
-        if (!mqttClient || typeof mqttClient.on !== 'function' || typeof mqttClient.publish !== 'function') {
-            return reject(new Error('MQTT client is not initialized'));
-        }
-        if (typeof mqttClient.setMaxListeners === 'function') {
-            mqttClient.setMaxListeners(0);
-        }
-
-        var done = false;
-        function cleanup() {
-            if (done) return;
-            done = true;
+    return new Promise((resolve, reject) => {
+        var timer = setTimeout(() => {
             mqttClient.removeListener('message', onMessage);
-        }
+            reject(new Error('MQTT sendMessage timed out after ' + timeout + 'ms'));
+        }, timeout);
 
         function onMessage(topic, message) {
             if (topic !== '/ls_resp') return;
-            var jsonMsg;
             try {
-                jsonMsg = JSON.parse(message.toString());
-                jsonMsg.payload = JSON.parse(jsonMsg.payload);
-            } catch (_) { return; }
-            if (String(jsonMsg.request_id) !== String(requestId)) return;
-            var extracted = extractIdsFromPayload(jsonMsg.payload);
-            cleanup();
-            resolve({ threadID: extracted.threadID, messageID: extracted.messageID });
+                var data = JSON.parse(message.toString());
+                if (String(data.request_id) === String(requestId)) {
+                    clearTimeout(timer);
+                    mqttClient.removeListener('message', onMessage);
+                    var extracted = extractIdsFromPayload(data.payload ? JSON.parse(data.payload) : {});
+                    resolve({ threadID: extracted.threadID, messageID: extracted.messageID });
+                }
+            } catch (_) { }
         }
 
         mqttClient.on('message', onMessage);
-        mqttClient.publish('/ls_req', JSON.stringify(content), { qos: 1, retain: false }, function(err) {
-            if (err) { cleanup(); reject(err); }
+        mqttClient.publish('/ls_req', JSON.stringify(content), { qos: 1 }, err => {
+            if (err) {
+                clearTimeout(timer);
+                mqttClient.removeListener('message', onMessage);
+                reject(err);
+            }
         });
-
-        setTimeout(function() {
-            if (done) return;
-            cleanup();
-            reject({ error: 'Timeout waiting for ACK' });
-        }, timeout);
     });
 }
 
@@ -118,7 +111,7 @@ module.exports = function (defaultFuncs, api, ctx) {
         if (!mqttClient) throw new Error('MQTT client not available');
 
         var baseBody = msg.body != null ? String(msg.body) : "";
-        var requestId = Math.floor(1000000 + Math.random() * 9000000);
+        var requestId = Math.floor(100 + Math.random() * 900);
         var epoch = (BigInt(Date.now()) << 22n).toString();
 
         var payload0 = {
@@ -177,6 +170,7 @@ module.exports = function (defaultFuncs, api, ctx) {
             if (msg.forwardAttachmentIds && msg.forwardAttachmentIds.length) {
                 payload0.attachment_fbids = payload0.attachment_fbids.concat(msg.forwardAttachmentIds.map(String));
             }
+
             if (toUpload.length) {
                 var uploaded = await uploadAttachments(toUpload);
                 for (var u of uploaded) {
@@ -244,10 +238,22 @@ module.exports = function (defaultFuncs, api, ctx) {
             }
         }
 
+        // Auto-detect isSingleUser from ctx.threadTypes if not explicitly provided.
+        // parseDelta in listenMqtt.js populates ctx.threadTypes[senderID] = 'dm' | 'group'
         if (isSingleUser === undefined && ctx.threadTypes) {
             isSingleUser = ctx.threadTypes[String(threadID)] === 'dm';
         }
 
+        // DM attachment sends — skip MQTT entirely.
+        // For E2EE DMs: route through the E2EE bridge (Noise WebSocket, Signal Protocol).
+        //   Facebook strips attachment_fbids from MQTT messages in E2EE threads
+        //   (can't re-encrypt CDN attachments on the fly), so MQTT silently drops them.
+        //   The vendor's client.sendImage/sendVideo/sendAudio encrypts the file data
+        //   and sends via the Noise WebSocket — the only path that actually delivers
+        //   attachments in E2EE threads.
+        // For non-E2EE DMs: use OldMessage.
+        //   /messaging/send/ with other_user_fbid routing works for plain DMs.
+        //   (For E2EE DMs it returns 404 because the endpoint is deprecated for those.)
         if (isSingleUser && msg.attachment) {
             var useE2EE = api.e2ee && typeof api.e2ee.isConnected === "function" && api.e2ee.isConnected();
             if (useE2EE) {
