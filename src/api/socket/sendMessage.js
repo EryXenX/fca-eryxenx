@@ -190,7 +190,7 @@ module.exports = function (defaultFuncs, api, ctx) {
             {
                 label: '46',
                 payload: JSON.stringify(payload0),
-                queue_name: "p_" + String(threadID),
+                queue_name: String(threadID),
                 task_id: 400,
                 failure_count: null
             },
@@ -201,7 +201,7 @@ module.exports = function (defaultFuncs, api, ctx) {
                     last_read_watermark_ts: Date.now(),
                     sync_group: 1
                 }),
-                queue_name: "p_" + String(threadID),
+                queue_name: String(threadID),
                 task_id: 401,
                 failure_count: null
             }
