@@ -77,7 +77,7 @@ module.exports = function (defaultFuncs, api, ctx) {
         resolve(bodies);
       };
       ctx.mqttClient.on("message", handleRes);
-      ctx.mqttClient.publish("/ls_req", JSON.stringify(content), { qos: 1, retain: false }, err => {
+      ctx.mqttClient.publish("/ls_req", JSON.stringify(content), { qos: 0, retain: false }, err => {
         if (err) {
           cleanup();
           callback && callback(err);
