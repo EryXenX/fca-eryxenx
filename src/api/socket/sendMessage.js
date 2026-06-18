@@ -111,7 +111,7 @@ module.exports = function (defaultFuncs, api, ctx) {
         if (!mqttClient) throw new Error('MQTT client not available');
 
         var baseBody = msg.body != null ? String(msg.body) : "";
-        var requestId = Math.floor(100 + Math.random() * 900);
+        var requestId = Math.floor(1000000 + Math.random() * 9000000);
         var epoch = (BigInt(Date.now()) << 22n).toString();
 
         var payload0 = {
@@ -190,7 +190,7 @@ module.exports = function (defaultFuncs, api, ctx) {
             {
                 label: '46',
                 payload: JSON.stringify(payload0),
-                queue_name: String(threadID),
+                queue_name: "p_" + String(threadID),
                 task_id: 400,
                 failure_count: null
             },
@@ -201,7 +201,7 @@ module.exports = function (defaultFuncs, api, ctx) {
                     last_read_watermark_ts: Date.now(),
                     sync_group: 1
                 }),
-                queue_name: String(threadID),
+                queue_name: "p_" + String(threadID),
                 task_id: 401,
                 failure_count: null
             }
