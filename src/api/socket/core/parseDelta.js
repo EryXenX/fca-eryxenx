@@ -359,7 +359,7 @@ module.exports = function createParseDelta(deps) {
         } catch (err) {
           return;
         }
-        if (!ctx.globalOptions.selfListen && formattedEvent.author.toString() === ctx.userID) return;
+        if (!ctx.globalOptions.selfListen && formattedEvent.author != null && formattedEvent.author.toString() === ctx.userID) return;
         if (!ctx.loggedIn) return;
         globalCallback(null, formattedEvent);
         if (formattedEvent && formattedEvent.type === "event" && formattedEvent.threadID != null && typeof ctx._syncThreadInfoFromEvent === "function") {
