@@ -1283,6 +1283,18 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
           ctxMain.e2ee = api.e2ee;
           api.connectE2EE = (deviceStorePath) => api.e2ee.connect(deviceStorePath, ctxMain.userID);
           api.listenE2EE = require("../src/api/socket/listenE2EE")(defaultFuncs, api, ctxMain);
+
+          // Auto-connect E2EE and make it the default listener so existing
+          // bots calling api.listen()/api.listenMqtt() also receive E2EE
+          // (Secret Conversation) messages without any extra setup.
+          api.connectE2EE()
+            .then(() => {
+              api.listen = api.listenE2EE;
+              logger("E2EE auto-connected and merged into api.listen()");
+            })
+            .catch((e) => {
+              logger(`E2EE auto-connect failed (non-fatal): ${e && e.message ? e.message : String(e)}`, "warn");
+            });
         } catch (e) {
           logger(`E2EE init failed (non-fatal): ${e && e.message ? e.message : String(e)}`, "warn");
         }
