@@ -47,6 +47,22 @@ class E2EEBridge {
     // ─────────────────────────────────────────────────────────────────────────
 
     async connect(deviceStorePath, userId) {
+        // Guard against concurrent/duplicate connect() calls (e.g. bot code
+        // calling api.connectE2EE() explicitly while auto-connect is also
+        // running) — without this, two parallel connects race and corrupt
+        // `this.client`, causing undefined responses downstream.
+        if (this._connectPromise) return this._connectPromise;
+        if (this.connected) return Promise.resolve({ userId: this.ctx.userID });
+
+        this._connectPromise = this._doConnect(deviceStorePath, userId)
+            .catch((err) => {
+                this._connectPromise = null;
+                throw err;
+            });
+        return this._connectPromise;
+    }
+
+    async _doConnect(deviceStorePath, userId) {
         const fs = require("fs");
 
         userId = userId || this.ctx.userID;
