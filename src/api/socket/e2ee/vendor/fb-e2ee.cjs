@@ -3408,7 +3408,7 @@ var logger = {
 
 // src/services/facebook-gateway.service.ts
 var require2 = (0, import_node_module.createRequire)(importMetaUrl);
-var fcaLogin = require2("../../vendor/fca-unofficial");
+var fcaLogin = require2("../../../../vendor/fca-unofficial");
 function normalizeError(error) {
   if (error instanceof Error) {
     return error;
@@ -3424,7 +3424,7 @@ var FacebookGatewayService = class {
       // Silence the vendored fca-unofficial's private npmlog so its internal
       // login lines don't appear in NEXCA's console output.
       let npmlog2, prevLevel;
-      try { npmlog2 = require2("../../vendor/fca-unofficial/node_modules/npmlog"); prevLevel = npmlog2.level; npmlog2.level = "silent"; } catch (_) {}
+      try { npmlog2 = require2("../../../../vendor/fca-unofficial/node_modules/npmlog"); prevLevel = npmlog2.level; npmlog2.level = "silent"; } catch (_) {}
       fcaLogin({ appState }, {}, (err, api) => {
         try { if (npmlog2) npmlog2.level = prevLevel; } catch (_) {}
         if (err) {
