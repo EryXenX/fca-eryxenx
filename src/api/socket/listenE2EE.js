@@ -44,7 +44,7 @@ module.exports = function (defaultFuncs, api, ctx) {
         };
 
 // Start regular MQTT listener
-        var mqttEmitter = api.listenMqtt(globalCallback);
+        var mqttEmitter = (api._listenMqttRaw || api.listenMqtt)(globalCallback);
         api._mqttEmitter = mqttEmitter;
 
 // Hook E2EE incoming messages (NEXCA native Noise WebSocket)
