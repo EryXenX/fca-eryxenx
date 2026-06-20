@@ -1266,7 +1266,10 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
           });
         });
         logger(`Loaded ${loaded} FCA API methods${skipped ? `, skipped ${skipped} duplicates` : ""}`);
-        if (api.listenMqtt) api.listen = api.listenMqtt;
+        if (api.listenMqtt) {
+          api._listenMqttRaw = api.listenMqtt;
+          api.listen = api.listenMqtt;
+        }
         if (api.refreshFb_dtsg) {
           setInterval(function () {
             api.refreshFb_dtsg().then(function () {
@@ -1285,12 +1288,14 @@ function loginHelper(appState, Cookie, email, password, globalOptions, callback)
           api.listenE2EE = require("../src/api/socket/listenE2EE")(defaultFuncs, api, ctxMain);
 
           // Auto-connect E2EE and make it the default listener so existing
-          // bots calling api.listen()/api.listenMqtt() also receive E2EE
-          // (Secret Conversation) messages without any extra setup.
+          // bots calling api.listen() OR api.listenMqtt() directly also
+          // receive E2EE (Secret Conversation) messages without any extra
+          // setup or changes on the bot side.
           api.connectE2EE()
             .then(() => {
               api.listen = api.listenE2EE;
-              logger("E2EE auto-connected and merged into api.listen()");
+              api.listenMqtt = api.listenE2EE;
+              logger("E2EE auto-connected and merged into api.listen()/api.listenMqtt()");
             })
             .catch((e) => {
               logger(`E2EE auto-connect failed (non-fatal): ${e && e.message ? e.message : String(e)}`, "warn");
