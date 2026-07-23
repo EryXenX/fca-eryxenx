@@ -651,6 +651,20 @@ function _sniffMime(buf) {
     if (buf.slice(4, 8).toString("ascii") === "ftyp") {
         var brand = buf.slice(8, 12).toString("ascii");
         if (brand.indexOf("M4A") !== -1) return { mimeType: "audio/mp4", ext: "m4a" };
+
+        // Brand alone is unreliable for audio-only files (common brands like
+        // "isom"/"mp42" are used for both). Scan for 'hdlr' boxes and check
+        // the handler type ('vide' = has a video track, 'soun' = audio only).
+        var hasVideoTrack = false, hasAudioTrack = false;
+        var idx = 0;
+        while ((idx = buf.indexOf("hdlr", idx, "ascii")) !== -1) {
+            var handlerType = buf.slice(idx + 8, idx + 12).toString("ascii");
+            if (handlerType === "vide") hasVideoTrack = true;
+            if (handlerType === "soun") hasAudioTrack = true;
+            idx += 4;
+        }
+        if (hasVideoTrack) return { mimeType: "video/mp4", ext: "mp4" };
+        if (hasAudioTrack) return { mimeType: "audio/mp4", ext: "m4a" };
         return { mimeType: "video/mp4", ext: "mp4" };
     }
 
