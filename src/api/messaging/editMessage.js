@@ -22,13 +22,25 @@ module.exports = function (defaultFuncs, api, ctx) {
       };
     }
 
-    if (!ctx.mqttClient) {
-      callback({ error: "Not connected to MQTT" });
+    if (!messageID || !text) {
+      callback({ error: "messageID and text are required." });
       return returnPromise;
     }
 
-    if (!messageID || !text) {
-      callback({ error: "messageID and text are required." });
+    const threadID = api.e2ee && typeof api.e2ee.getThreadIdForMessage === "function"
+      ? api.e2ee.getThreadIdForMessage(messageID) : null;
+    const isE2EEThread = threadID && ctx.threadTypes && ctx.threadTypes[String(threadID)] === 'dm' &&
+      api.e2ee && typeof api.e2ee.isConnected === "function" && api.e2ee.isConnected();
+
+    if (isE2EEThread) {
+      api.e2ee.editMessage(String(threadID), messageID, text)
+        .then((result) => callback(undefined, result))
+        .catch((err) => callback(err));
+      return returnPromise;
+    }
+
+    if (!ctx.mqttClient) {
+      callback({ error: "Not connected to MQTT" });
       return returnPromise;
     }
 
