@@ -169,8 +169,10 @@ async function unsendMessage(appState, chatJid, messageId) {
 /** Marks an E2EE thread as read via the native engine. */
 async function markRead(appState, chatJid, watermarkTs) {
     const client = await getClient(appState);
-    if (typeof chatJid === "string" && chatJid.indexOf("@") === -1) chatJid = chatJid + "@msgr";
-    return client.markAsRead(chatJid, watermarkTs ? BigInt(watermarkTs) : undefined);
+    // Unlike other native functions, MxMarkRead's threadId field is int64,
+    // not a JID string — strip any "@..." suffix and pass a plain number.
+    const numericId = typeof chatJid === "string" ? Number(chatJid.split("@")[0]) : Number(chatJid);
+    return client.markAsRead(numericId, watermarkTs ? BigInt(watermarkTs) : undefined);
 }
 
 module.exports = { getClient, sendMedia, sendReaction, unsendMessage, markRead };

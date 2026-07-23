@@ -152,7 +152,9 @@ class E2EEBridge {
             this._senderJidMap = this._senderJidMap || new Map();
             this._mediaCache = this._mediaCache || new Map();
             this._msgThreadMap = this._msgThreadMap || new Map();
+            this._msgTextCache = this._msgTextCache || new Map();
             if (msg.id) this._senderJidMap.set(String(msg.id), msg.senderJid || null);
+            if (msg.id && msg.text) this._msgTextCache.set(String(msg.id), String(msg.text));
 
             if (msg.kind && msg.kind !== "text" && msg.media) {
                 try {
@@ -253,12 +255,13 @@ class E2EEBridge {
 
             // Populate messageReply so reply handlers work the same as in MQTT
             if (isReply) {
+                const replyText = msg.replyTo.text || this._msgTextCache.get(String(msg.replyTo.messageId)) || "";
                 event.messageReply = {
                     messageID: msg.replyTo.messageId,
                     senderID:  msg.replyTo.senderId || "",
                     threadID:  normalizedThreadId,
-                    body:      msg.replyTo.text || "",
-                    args:      (msg.replyTo.text || "").trim().split(/\s+/).filter(Boolean),
+                    body:      replyText,
+                    args:      replyText.trim().split(/\s+/).filter(Boolean),
                     isE2EE:    true,
                     isGroup:   !!msg.isGroup,
                     mentions:  {},
@@ -287,6 +290,23 @@ class E2EEBridge {
             }
 
             this._messageCallback(null, event);
+        });
+
+        // Incoming E2EE reactions — needed for onReaction handlers (e.g. a
+        // reaction-triggered unsend feature) to fire in encrypted threads.
+        this.client.onEvent("e2ee_reaction", (r) => {
+            if (!this._messageCallback) return;
+            const threadID = r.chatJid ? String(r.chatJid).split("@")[0].split(".")[0] : "";
+            const senderID = r.senderId || (r.senderJid ? String(r.senderJid).split(".")[0] : "");
+            this._messageCallback(null, {
+                type: "message_reaction",
+                threadID,
+                messageID: r.messageId,
+                reaction: r.reaction,
+                senderID,
+                userID: senderID,
+                isE2EE: true
+            });
         });
 
         // Surface connection errors so the bot log shows them.
@@ -332,10 +352,14 @@ class E2EEBridge {
         const attachment = (msg && typeof msg === "object") ? (msg.attachment || null) : null;
 
         this._msgThreadMap = this._msgThreadMap || new Map();
+        this._msgTextCache = this._msgTextCache || new Map();
 
         if (!attachment) {
             const result = await this.client.sendMessage({ threadId, text, replyToMessageId });
-            if (result && result.messageId) this._msgThreadMap.set(String(result.messageId), threadId);
+            if (result && result.messageId) {
+                this._msgThreadMap.set(String(result.messageId), threadId);
+                if (text) this._msgTextCache.set(String(result.messageId), text);
+            }
             return result;
         }
 
