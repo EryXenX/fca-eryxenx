@@ -209,6 +209,11 @@ class E2EEBridge {
                     console.log("[E2EE-DEBUG] msg.kind=" + msg.kind + " msg.media keys:", msg.media ? Object.keys(msg.media) : null);
                 } catch (_) {}
             }
+            if (msg.kind === "reaction") {
+                try {
+                    console.log("[E2EE-DEBUG] FULL reaction msg dump:", JSON.stringify(msg, (k, v) => Buffer.isBuffer(v) ? `<Buffer ${v.length}b>` : v, 2));
+                } catch (_) { console.log("[E2EE-DEBUG] FULL reaction msg (non-serializable):", msg); }
+            }
 
             const event = {
                 type:        isReply ? "message_reply" : "message",
