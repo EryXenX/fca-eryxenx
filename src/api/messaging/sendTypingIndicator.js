@@ -31,6 +31,22 @@ module.exports = function (defaultFuncs, api, ctx) {
     if (typeof ctx.wsReqNumber !== "number") ctx.wsReqNumber = 0;
     const threadIDs = Array.isArray(threadID) ? threadID : [threadID];
     threadIDs.forEach(tid => {
+      const isE2EEThread = ctx.threadTypes && ctx.threadTypes[String(tid)] === 'dm' &&
+        api.e2ee && typeof api.e2ee.isConnected === "function" && api.e2ee.isConnected();
+
+      if (isE2EEThread) {
+        const sendE2EETyping = (state) => {
+          api.e2ee.sendTyping(String(tid), state).catch((err) => {
+            console.error("[sendTyping] E2EE typing failed:", err && err.message ? err.message : err);
+          });
+        };
+        sendE2EETyping(isTyping);
+        if (isTyping && (options.autoStop !== false)) {
+          setTimeout(() => sendE2EETyping(false), options.duration || 10000);
+        }
+        return;
+      }
+
       var isGroupThread = getType(tid) === "Array" ? 0 : 1;
       var threadType = isGroupThread ? 2 : 1;
       var duration = options.duration || 10000;
