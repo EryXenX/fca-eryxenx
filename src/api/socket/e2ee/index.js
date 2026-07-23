@@ -422,6 +422,15 @@ class E2EEBridge {
                     fileName = fileName || "file.bin";
                     mimeType = mimeType || "application/octet-stream";
                 }
+            } else if (mimeType.startsWith("image/") || mimeType.startsWith("video/") || mimeType.startsWith("audio/")) {
+                // File extension can lie about actual content (e.g. a JPEG saved
+                // with a .png name) — verify against the real bytes and correct
+                // mimeType if they disagree, since that also feeds dimension parsing.
+                const sniffed = _sniffMime(data);
+                if (sniffed && sniffed.mimeType !== mimeType) {
+                    logger.error("E2EE", `[media-mismatch] filename says ${mimeType} but content is actually ${sniffed.mimeType} (${fileName}) — using real content type`);
+                    mimeType = sniffed.mimeType;
+                }
             }
 
             const dims = mimeType.startsWith("image/") ? _getImageDimensions(data, mimeType) : null;
@@ -457,7 +466,21 @@ class E2EEBridge {
             try {
                 console.log(`[E2EEBridge] send result:`, JSON.stringify(result, (k, v) => typeof v === "bigint" ? v.toString() : v));
             } catch (_) { console.log(`[E2EEBridge] send result (non-serializable):`, result); }
-            if (result && result.messageId) this._msgThreadMap.set(String(result.messageId), threadId);
+            if (result && result.messageId) {
+                this._msgThreadMap.set(String(result.messageId), threadId);
+                // Cache our own sent media so replies to it (e.g. "/imgur" replying
+                // to a /pp response) can be resolved without a CDN round-trip —
+                // we already have the plaintext bytes right here.
+                this._mediaCache = this._mediaCache || new Map();
+                this._mediaCache.set(String(result.messageId), {
+                    kind: mediaType,
+                    localBuffer: data,
+                    mimeType,
+                    fileName,
+                    width: dims ? dims.width : undefined,
+                    height: dims ? dims.height : undefined
+                });
+            }
             results.push(result);
         }
 
@@ -470,7 +493,14 @@ class E2EEBridge {
      * do axios.get(attachment.url) work unmodified).
      */
     async resolveAttachment(meta) {
-        if (!meta || !meta.directPath || !meta.mediaKey) throw new Error("Invalid E2EE attachment metadata");
+        if (!meta) throw new Error("Invalid E2EE attachment metadata");
+
+        // Our own sent media — we already have the plaintext bytes.
+        if (meta.localBuffer) {
+            return localMediaServer.serveBuffer(meta.localBuffer, meta.mimeType);
+        }
+
+        if (!meta.directPath || !meta.mediaKey) throw new Error("Invalid E2EE attachment metadata");
 
         // directPath from the message is host-relative (e.g. "/v/t800.../x.enc?...").
         // The exact CDN host Messenger's own client resolves this against isn't
