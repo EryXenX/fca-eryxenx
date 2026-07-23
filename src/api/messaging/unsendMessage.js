@@ -5,14 +5,26 @@ const log = require("../../../func/logAdapter");
 
 module.exports = function (defaultFuncs, api, ctx) {
   return function unsendMessage(messageID, threadID, callback) {
-    const isE2EEThread = ctx.threadTypes && ctx.threadTypes[String(threadID)] === 'dm' &&
+    // GoatBot's message.unsend(messageID, callback) wrapper only passes 2
+    // args, so `threadID` here is often actually the callback function.
+    if (typeof threadID === "function") {
+      callback = threadID;
+      threadID = null;
+    }
+
+    const resolvedThreadID = threadID ||
+      (api.e2ee && typeof api.e2ee.getThreadIdForMessage === "function" ? api.e2ee.getThreadIdForMessage(messageID) : null);
+
+    const isE2EEThread = resolvedThreadID && ctx.threadTypes && ctx.threadTypes[String(resolvedThreadID)] === 'dm' &&
       api.e2ee && typeof api.e2ee.isConnected === "function" && api.e2ee.isConnected();
 
     if (isE2EEThread) {
-      return api.e2ee.unsendMessage(messageID, String(threadID))
+      return api.e2ee.unsendMessage(messageID, String(resolvedThreadID))
         .then((result) => { callback?.(null, result); return result; })
         .catch((err) => { callback?.(err); throw err; });
     }
+
+    threadID = resolvedThreadID; // restore for the legacy MQTT path below
 
     return new Promise((resolve, reject) => {
       if (!ctx.mqttClient) {

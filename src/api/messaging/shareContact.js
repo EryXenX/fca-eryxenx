@@ -6,18 +6,27 @@ module.exports = function(defaultFuncs, api, ctx) {
     if (!text) {
       text = "";
     }
+
+    // Some callers (e.g. GoatBot's uid.js) pass a messageID string in the
+    // 4th ("callback") slot to reply to, not an actual callback function.
+    var replyToMessageId;
+    if (typeof callback !== "function") {
+      if (typeof callback === "string" || typeof callback === "number") {
+        replyToMessageId = String(callback);
+      }
+      callback = undefined;
+    }
+
     var resolveFunc = function() {};
     var rejectFunc = function() {};
     var returnPromise = new Promise(function(resolve, reject) {
       resolveFunc = resolve;
       rejectFunc = reject;
     });
-    if (!callback) {
-      callback = function(err, data) {
-        if (err) return rejectFunc(err);
-        resolveFunc(data);
-      };
-    }
+    var cb = callback || function(err, data) {
+      if (err) return rejectFunc(err);
+      resolveFunc(data);
+    };
 
     // E2EE threads don't accept this plaintext MQTT task, and there's no
     // native E2EE "contact card" message type in either engine — so degrade
@@ -28,9 +37,9 @@ module.exports = function(defaultFuncs, api, ctx) {
 
     if (isE2EEThread) {
       const fallbackText = (text ? text + "\n" : "") + `👤 Contact ID: ${senderID}\n🔗 https://www.facebook.com/${senderID}`;
-      return api.sendMessage(fallbackText, threadID)
-        .then((result) => { callback(null, result); return result; })
-        .catch((err) => { callback(err); throw err; });
+      return api.sendMessage(fallbackText, threadID, undefined, replyToMessageId)
+        .then((result) => { cb(null, result); return result; })
+        .catch((err) => { cb(err); throw err; });
     }
 
     let count_req = 0;
@@ -66,7 +75,7 @@ module.exports = function(defaultFuncs, api, ctx) {
       if (settled) return;
       settled = true;
       ctx.mqttClient.removeListener("message", handleResponse);
-      callback(null, { success: true, note: "no server ack received (fire-and-forget)" });
+      cb(null, { success: true, note: "no server ack received (fire-and-forget)" });
     }, 8000);
 
     function handleResponse(topic, message) {

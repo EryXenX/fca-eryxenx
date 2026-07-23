@@ -20,8 +20,10 @@ module.exports = function (defaultFuncs, api, ctx) {
     }
     const cb = typeof callback === "function" ? callback : undefined;
 
-    // threadID না থাকলে ctx থেকে নেওয়ার চেষ্টা
-    const finalThreadID = threadID || ctx.lastThreadID || "0";
+    // threadID না থাকলে e2ee bridge এর ম্যাপ থেকে বের করার চেষ্টা, তারপর ctx fallback
+    const resolvedThreadID = threadID ||
+      (api.e2ee && typeof api.e2ee.getThreadIdForMessage === "function" ? api.e2ee.getThreadIdForMessage(messageID) : null);
+    const finalThreadID = resolvedThreadID || ctx.lastThreadID || "0";
 
     const isE2EEThread = ctx.threadTypes && ctx.threadTypes[String(finalThreadID)] === 'dm' &&
       api.e2ee && typeof api.e2ee.isConnected === "function" && api.e2ee.isConnected();

@@ -166,4 +166,11 @@ async function unsendMessage(appState, chatJid, messageId) {
     return client.unsendE2EEMessage(chatJid, messageId);
 }
 
-module.exports = { getClient, sendMedia, sendReaction, unsendMessage };
+/** Marks an E2EE thread as read via the native engine. */
+async function markRead(appState, chatJid, watermarkTs) {
+    const client = await getClient(appState);
+    if (typeof chatJid === "string" && chatJid.indexOf("@") === -1) chatJid = chatJid + "@msgr";
+    return client.markAsRead(chatJid, watermarkTs ? BigInt(watermarkTs) : undefined);
+}
+
+module.exports = { getClient, sendMedia, sendReaction, unsendMessage, markRead };

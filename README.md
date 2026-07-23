@@ -51,7 +51,7 @@ NEXCA MQTT · Signal Protocol E2EE (mautrix-go powered) · sessionGuard · 90+ A
 npm install fca-eryxenx
 ```
 
-Node.js >= 20 required.
+Node.js >= 18 required.
 
 The E2EE media engine ships a precompiled native binary (`src/api/socket/e2ee/native/build/`) for **Linux (.so)** and **Windows (.dll)**, loaded via the `koffi` FFI. `npm install` pulls in `koffi` and `yumi-json-bigint` automatically — no extra setup needed. If your deployment platform isn't Linux/Windows x64 (e.g. macOS, ARM), the native engine will fail to load and E2EE media/reactions/unsend automatically fall back to the built-in JS engine (text messaging is unaffected either way).
 

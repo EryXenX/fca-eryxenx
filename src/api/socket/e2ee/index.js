@@ -151,6 +151,7 @@ class E2EEBridge {
         this.client.onEvent("e2ee_message", async (msg) => {
             this._senderJidMap = this._senderJidMap || new Map();
             this._mediaCache = this._mediaCache || new Map();
+            this._msgThreadMap = this._msgThreadMap || new Map();
             if (msg.id) this._senderJidMap.set(String(msg.id), msg.senderJid || null);
 
             if (msg.kind && msg.kind !== "text" && msg.media) {
@@ -180,6 +181,10 @@ class E2EEBridge {
                 return at === -1 ? id : id.slice(0, at);
             }
             const normalizedThreadId = normalizeThreadId(msg.threadId);
+            this._knownE2EEThreads = this._knownE2EEThreads || new Set();
+            this._knownE2EEThreads.add(normalizedThreadId);
+            if (msg.id) this._msgThreadMap.set(String(msg.id), normalizedThreadId);
+            if (msg.replyTo && msg.replyTo.messageId) this._msgThreadMap.set(String(msg.replyTo.messageId), normalizedThreadId);
 
             // Build mentions: vendor surfaces an array [{ id, text }] or object
             var mentions = {};
@@ -192,6 +197,16 @@ class E2EEBridge {
             }
 
             const isReply = !!(msg.replyTo && msg.replyTo.messageId);
+            if (isReply) {
+                try {
+                    console.log("[E2EE-DEBUG] msg.replyTo raw:", JSON.stringify(msg.replyTo, (k, v) => Buffer.isBuffer(v) ? `<Buffer ${v.length}b>` : v));
+                } catch (_) { console.log("[E2EE-DEBUG] msg.replyTo (raw, non-serializable):", msg.replyTo); }
+            }
+            if (msg.kind && msg.kind !== "text") {
+                try {
+                    console.log("[E2EE-DEBUG] msg.kind=" + msg.kind + " msg.media keys:", msg.media ? Object.keys(msg.media) : null);
+                } catch (_) {}
+            }
 
             const event = {
                 type:        isReply ? "message_reply" : "message",
@@ -316,8 +331,12 @@ class E2EEBridge {
         const text = typeof msg === "string" ? msg : (msg && msg.body != null ? String(msg.body) : "");
         const attachment = (msg && typeof msg === "object") ? (msg.attachment || null) : null;
 
+        this._msgThreadMap = this._msgThreadMap || new Map();
+
         if (!attachment) {
-            return this.client.sendMessage({ threadId, text, replyToMessageId });
+            const result = await this.client.sendMessage({ threadId, text, replyToMessageId });
+            if (result && result.messageId) this._msgThreadMap.set(String(result.messageId), threadId);
+            return result;
         }
 
         // Always use the vendor's Noise WebSocket path for attachments.
@@ -385,6 +404,7 @@ class E2EEBridge {
                 else result = await this.client.sendFile(input);
             }
             console.log(`[E2EEBridge] send result:`, JSON.stringify(result));
+            if (result && result.messageId) this._msgThreadMap.set(String(result.messageId), threadId);
             results.push(result);
         }
 
@@ -419,6 +439,19 @@ class E2EEBridge {
         if (!buffer) throw new Error("downloadMedia returned no data");
 
         return localMediaServer.serveBuffer(buffer, meta.mimeType);
+    }
+
+    getKnownThreads() {
+        return this._knownE2EEThreads ? Array.from(this._knownE2EEThreads) : [];
+    }
+
+    async markRead(threadId, watermarkTs) {
+        this.ensureConnected();
+        return nativeMediaBridge.markRead(this.api.getAppState(), threadId, watermarkTs);
+    }
+
+    getThreadIdForMessage(messageId) {
+        return (this._msgThreadMap && this._msgThreadMap.get(String(messageId))) || undefined;
     }
 
     getSenderJid(messageId) {

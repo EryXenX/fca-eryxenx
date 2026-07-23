@@ -24,6 +24,13 @@ module.exports = function(defaultFuncs, api, ctx) {
       folder: "inbox"
     };
 
+    if (api.e2ee && typeof api.e2ee.isConnected === "function" && api.e2ee.isConnected()) {
+      const threads = api.e2ee.getKnownThreads();
+      Promise.all(threads.map((tid) => api.e2ee.markRead(tid).catch((err) => {
+        log.error("markAsReadAll", "[E2EE] failed to mark " + tid + " as read: " + (err && err.message ? err.message : err));
+      })));
+    }
+
     defaultFuncs
       .post(
         "https://www.facebook.com/ajax/mercury/mark_folder_as_read.php",
