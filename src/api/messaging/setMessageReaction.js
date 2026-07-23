@@ -28,6 +28,8 @@ module.exports = function (defaultFuncs, api, ctx) {
     const isE2EEThread = ctx.threadTypes && ctx.threadTypes[String(finalThreadID)] === 'dm' &&
       api.e2ee && typeof api.e2ee.isConnected === "function" && api.e2ee.isConnected();
 
+    console.log(`[E2EE-DEBUG] setMessageReaction: messageID=${messageID}, threadID param=${threadID}, resolvedThreadID=${resolvedThreadID}, finalThreadID=${finalThreadID}, threadType=${ctx.threadTypes ? ctx.threadTypes[String(finalThreadID)] : "n/a"}, e2eeConnected=${api.e2ee && typeof api.e2ee.isConnected === "function" ? api.e2ee.isConnected() : "n/a"}, isE2EEThread=${isE2EEThread}`);
+
     if (isE2EEThread) {
       return api.e2ee.sendReaction(String(finalThreadID), messageID, reaction)
         .then((result) => { if (cb) cb(null, result); return result; })
