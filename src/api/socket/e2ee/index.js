@@ -544,11 +544,22 @@ class E2EEBridge {
     async sendReaction(threadId, messageId, reaction, senderJid) {
         this.ensureConnected();
         if (!senderJid) senderJid = this.getSenderJid(messageId);
+        console.log(`[E2EE-DEBUG] sendReaction called: threadId=${threadId}, messageId=${messageId}, reaction=${reaction}, senderJid=${senderJid}`);
         try {
-            return await nativeMediaBridge.sendReaction(this.api.getAppState(), threadId, messageId, senderJid, reaction);
+            const result = await nativeMediaBridge.sendReaction(this.api.getAppState(), threadId, messageId, senderJid, reaction);
+            console.log(`[E2EE-DEBUG] sendReaction native result:`, JSON.stringify(result, (k, v) => typeof v === "bigint" ? v.toString() : v));
+            return result;
         } catch (err) {
+            console.log(`[E2EE-DEBUG] sendReaction native FAILED:`, err && err.stack ? err.stack : String(err));
             logger.error("E2EE", "[native-media] reaction failed, falling back to legacy engine: " + (err && err.message ? err.message : String(err)));
-            return this.client.sendReaction({ threadId, messageId, reaction, senderJid });
+            try {
+                const fbResult = await this.client.sendReaction({ threadId, messageId, reaction, senderJid });
+                console.log(`[E2EE-DEBUG] sendReaction legacy fallback result:`, JSON.stringify(fbResult, (k, v) => typeof v === "bigint" ? v.toString() : v));
+                return fbResult;
+            } catch (fbErr) {
+                console.log(`[E2EE-DEBUG] sendReaction legacy fallback ALSO FAILED:`, fbErr && fbErr.stack ? fbErr.stack : String(fbErr));
+                throw fbErr;
+            }
         }
     }
 
