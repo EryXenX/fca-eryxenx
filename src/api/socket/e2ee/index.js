@@ -201,7 +201,7 @@ class E2EEBridge {
             const isReply = !!(msg.replyTo && msg.replyTo.messageId);
             if (isReply) {
                 try {
-                    console.log("[E2EE-DEBUG] msg.replyTo raw:", JSON.stringify(msg.replyTo, (k, v) => Buffer.isBuffer(v) ? `<Buffer ${v.length}b>` : v));
+                    console.log("[E2EE-DEBUG] msg.replyTo raw:", JSON.stringify(msg.replyTo, (k, v) => typeof v === "bigint" ? v.toString() : Buffer.isBuffer(v) ? `<Buffer ${v.length}b>` : v));
                 } catch (_) { console.log("[E2EE-DEBUG] msg.replyTo (raw, non-serializable):", msg.replyTo); }
             }
             if (msg.kind && msg.kind !== "text") {
@@ -211,8 +211,19 @@ class E2EEBridge {
             }
             if (msg.kind === "reaction") {
                 try {
-                    console.log("[E2EE-DEBUG] FULL reaction msg dump:", JSON.stringify(msg, (k, v) => Buffer.isBuffer(v) ? `<Buffer ${v.length}b>` : v, 2));
+                    console.log("[E2EE-DEBUG] FULL reaction msg dump:", JSON.stringify(msg, (k, v) => typeof v === "bigint" ? v.toString() : Buffer.isBuffer(v) ? `<Buffer ${v.length}b>` : v, 2));
                 } catch (_) { console.log("[E2EE-DEBUG] FULL reaction msg (non-serializable):", msg); }
+
+                this._messageCallback(null, {
+                    type: "message_reaction",
+                    threadID: normalizedThreadId,
+                    messageID: msg.targetId,
+                    reaction: msg.reaction,
+                    senderID: msg.senderId || senderID,
+                    userID: msg.senderId || senderID,
+                    isE2EE: true
+                });
+                return;
             }
 
             const event = {
@@ -300,7 +311,7 @@ class E2EEBridge {
         // Incoming E2EE reactions — needed for onReaction handlers (e.g. a
         // reaction-triggered unsend feature) to fire in encrypted threads.
         this.client.onEvent("e2ee_reaction", (r) => {
-            console.log("[E2EE-DEBUG] e2ee_reaction fired:", JSON.stringify(r));
+            console.log("[E2EE-DEBUG] e2ee_reaction fired:", JSON.stringify(r, (k, v) => typeof v === "bigint" ? v.toString() : v));
             if (!this._messageCallback) return;
             const threadID = r.chatJid ? String(r.chatJid).split("@")[0].split(".")[0] : "";
             const senderID = r.senderId || (r.senderJid ? String(r.senderJid).split(".")[0] : "");
@@ -318,7 +329,8 @@ class E2EEBridge {
         // Catch-all: log any E2EE event type we haven't explicitly handled,
         // so we can see the real event name if our assumptions above are wrong.
         this.client.onEvent((evt) => {
-            const known = ["e2ee_message", "e2ee_reaction", "connected", "disconnected", "error"];
+            const known = ["e2ee_message", "e2ee_reaction", "connected", "disconnected", "error",
+                "e2ee_receipt", "read_receipt", "presence", "reaction"];
             if (evt && !known.includes(evt.type)) {
                 console.log("[E2EE-DEBUG] unhandled event type:", evt.type, "data keys:", evt.data ? Object.keys(evt.data) : null);
             }
@@ -442,7 +454,9 @@ class E2EEBridge {
                 else if (mediaType === "audio") result = await this.client.sendAudio(input);
                 else result = await this.client.sendFile(input);
             }
-            console.log(`[E2EEBridge] send result:`, JSON.stringify(result));
+            try {
+                console.log(`[E2EEBridge] send result:`, JSON.stringify(result, (k, v) => typeof v === "bigint" ? v.toString() : v));
+            } catch (_) { console.log(`[E2EEBridge] send result (non-serializable):`, result); }
             if (result && result.messageId) this._msgThreadMap.set(String(result.messageId), threadId);
             results.push(result);
         }
