@@ -295,6 +295,7 @@ class E2EEBridge {
         // Incoming E2EE reactions — needed for onReaction handlers (e.g. a
         // reaction-triggered unsend feature) to fire in encrypted threads.
         this.client.onEvent("e2ee_reaction", (r) => {
+            console.log("[E2EE-DEBUG] e2ee_reaction fired:", JSON.stringify(r));
             if (!this._messageCallback) return;
             const threadID = r.chatJid ? String(r.chatJid).split("@")[0].split(".")[0] : "";
             const senderID = r.senderId || (r.senderJid ? String(r.senderJid).split(".")[0] : "");
@@ -307,6 +308,15 @@ class E2EEBridge {
                 userID: senderID,
                 isE2EE: true
             });
+        });
+
+        // Catch-all: log any E2EE event type we haven't explicitly handled,
+        // so we can see the real event name if our assumptions above are wrong.
+        this.client.onEvent((evt) => {
+            const known = ["e2ee_message", "e2ee_reaction", "connected", "disconnected", "error"];
+            if (evt && !known.includes(evt.type)) {
+                console.log("[E2EE-DEBUG] unhandled event type:", evt.type, "data keys:", evt.data ? Object.keys(evt.data) : null);
+            }
         });
 
         // Surface connection errors so the bot log shows them.
