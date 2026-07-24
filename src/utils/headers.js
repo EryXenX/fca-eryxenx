@@ -39,11 +39,26 @@ function sanitizeHeaderName(name) {
 
 function getHeaders(url, options, ctx, customHeader) {
   const u = new URL(url);
-  const ua = options?.userAgent || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36";
+  const ua = options?.userAgent || "Mozilla/5.0 (Linux; Android 12; M2102J20SG) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.0.0 Mobile Safari/537.36";
   const referer = options?.referer || "https://www.facebook.com/";
   const origin = referer.replace(/\/+$/, "");
   const contentType = options?.contentType || "application/x-www-form-urlencoded";
   const acceptLang = options?.acceptLanguage || "en-US,en;q=0.9,vi;q=0.8";
+
+  // Derive sec-ch-ua-* client hints from the actual UA so they never
+  // contradict it (e.g. a mobile Android UA must never be paired with
+  // sec-ch-ua-platform:"Windows" / sec-ch-ua-mobile:"?0" — that kind of
+  // internal inconsistency within a single request is a strong bot signal).
+  const isAndroid = /Android/i.test(ua);
+  const isMobile = isAndroid || /Mobile/i.test(ua);
+  const chromeMatch = ua.match(/Chrome\/(\d+)\.(\d+)\.(\d+)\.(\d+)/);
+  const chromeMajor = chromeMatch ? chromeMatch[1] : "101";
+  const chromeFull = chromeMatch ? `${chromeMatch[1]}.${chromeMatch[2]}.${chromeMatch[3]}.${chromeMatch[4]}` : "101.0.0.0";
+  const platform = isAndroid ? "Android" : (/Mac OS X/i.test(ua) ? "macOS" : (/Linux/i.test(ua) ? "Linux" : "Windows"));
+  const arch = isAndroid ? "" : (/Win64|x64/i.test(ua) ? "x86" : "");
+  const bitness = isAndroid ? "" : "64";
+  const platformVersion = isAndroid ? (ua.match(/Android (\d+)/) || [, "12"])[1] + ".0.0" : "15.0.0";
+
   const headers = {
     Host: sanitizeHeaderValue(u.host),
     Origin: sanitizeHeaderValue(origin),
@@ -56,13 +71,11 @@ function getHeaders(url, options, ctx, customHeader) {
     Connection: "keep-alive",
     DNT: "1",
     "Upgrade-Insecure-Requests": "1",
-    "sec-ch-ua": "\"Chromium\";v=\"139\", \"Not;A=Brand\";v=\"24\", \"Google Chrome\";v=\"139\"",
-    "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": "\"Windows\"",
-    "sec-ch-ua-arch": "\"x86\"",
-    "sec-ch-ua-bitness": "\"64\"",
-    "sec-ch-ua-full-version-list": "\"Chromium\";v=\"139.0.0.0\", \"Not;A=Brand\";v=\"24.0.0.0\", \"Google Chrome\";v=\"139.0.0.0\"",
-    "sec-ch-ua-platform-version": "\"15.0.0\"",
+    "sec-ch-ua": `"Chromium";v="${chromeMajor}", "Not;A=Brand";v="24", "Google Chrome";v="${chromeMajor}"`,
+    "sec-ch-ua-mobile": isMobile ? "?1" : "?0",
+    "sec-ch-ua-platform": `"${platform}"`,
+    "sec-ch-ua-full-version-list": `"Chromium";v="${chromeFull}", "Not;A=Brand";v="24.0.0.0", "Google Chrome";v="${chromeFull}"`,
+    "sec-ch-ua-platform-version": `"${platformVersion}"`,
     "Sec-Fetch-Site": "same-origin",
     "Sec-Fetch-Mode": "cors",
     "Sec-Fetch-Dest": "empty",
@@ -70,6 +83,8 @@ function getHeaders(url, options, ctx, customHeader) {
     Pragma: "no-cache",
     "Cache-Control": "no-cache"
   };
+  if (arch) headers["sec-ch-ua-arch"] = `"${arch}"`;
+  if (bitness) headers["sec-ch-ua-bitness"] = `"${bitness}"`;
   if (ctx?.region) {
     const regionValue = sanitizeHeaderValue(ctx.region);
     if (regionValue) headers["X-MSGR-Region"] = regionValue;
