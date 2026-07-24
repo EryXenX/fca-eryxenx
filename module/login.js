@@ -98,7 +98,7 @@ function login(loginData, options, callback) {
     autoReconnect: true,
     online: true,
     emitReady: false,
-    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
+    userAgent: "Mozilla/5.0 (Linux; Android 12; M2102J20SG) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/101.0.0.0 Mobile Safari/537.36"
   };
   setOptions(globalOptions, options);
   let prCallback = null;
