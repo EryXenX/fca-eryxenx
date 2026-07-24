@@ -1,6 +1,6 @@
 {
   "name": "fca-eryxenx",
-  "version": "39.9.0",
+  "version": "39.1.1",
   "description": "Facebook Chat API by EryXenX | Stable • Auto Re-login • Full E2EE Support — send messages, media, reactions & more in encrypted chats, hassle-free",
   "main": "index.js",
   "types": "index.d.ts",
