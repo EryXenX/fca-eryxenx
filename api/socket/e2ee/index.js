@@ -349,18 +349,78 @@ class E2EEBridge {
         // GROUP E2EE only: the vendor engine's own group Sender-Key decrypt
         // has an unresolved bug (repeated "missing sender key state" /
         // "ciphertext version too old" errors). The native mautrix-go engine
-        // has its own message receiving (e2eeMessage event) that's proven
-        // reliable elsewhere, so we additionally listen there and forward
-        // ONLY group messages through it. DM receiving is untouched — it
-        // still goes exclusively through the vendor engine above, unchanged.
+        // decrypts these correctly, so group messages are received through it
+        // instead. DM receiving is untouched — it still goes exclusively
+        // through the vendor engine above, unchanged.
         try {
+            this._seenGroupMsgIds = this._seenGroupMsgIds || new Set();
             await nativeMediaBridge.onNativeEvent(this.api.getAppState(), "e2eeMessage", (data) => {
                 try {
-                    console.log("[E2EE-DEBUG] native e2eeMessage:", JSON.stringify(data, (k, v) =>
-                        typeof v === "bigint" ? v.toString() : Buffer.isBuffer(v) ? `<Buffer ${v.length}b>` : v, 2));
-                } catch (_) { console.log("[E2EE-DEBUG] native e2eeMessage (non-serializable):", data); }
+                    if (!data || !data.chatJid || !String(data.chatJid).endsWith("@g.us")) return; // DMs stay on vendor path
+                    if (!data.id) return;
+                    if (this._seenGroupMsgIds.has(String(data.id))) return;
+                    this._seenGroupMsgIds.add(String(data.id));
+                    if (this._seenGroupMsgIds.size > 2000) {
+                        // simple cap so this never grows unbounded over a long-running process
+                        const it = this._seenGroupMsgIds.values();
+                        for (let i = 0; i < 500; i++) this._seenGroupMsgIds.delete(it.next().value);
+                    }
+
+                    const threadID = String(data.threadId || String(data.chatJid).split("@")[0]);
+                    const senderID = data.senderId || (data.senderJid ? String(data.senderJid).split(":")[0].split(".")[0] : "");
+
+                    this._msgThreadMap = this._msgThreadMap || new Map();
+                    this._msgTextCache = this._msgTextCache || new Map();
+                    this._senderJidMap = this._senderJidMap || new Map();
+                    this._knownE2EEThreads = this._knownE2EEThreads || new Set();
+                    this._knownE2EEGroups = this._knownE2EEGroups || new Set();
+                    this._msgThreadMap.set(String(data.id), threadID);
+                    if (data.text) this._msgTextCache.set(String(data.id), String(data.text));
+                    this._senderJidMap.set(String(data.id), data.senderJid || null);
+                    this._knownE2EEThreads.add(threadID);
+                    this._knownE2EEGroups.add(threadID);
+
+                    const isReply = !!(data.replyTo && data.replyTo.messageId);
+                    if (isReply) this._msgThreadMap.set(String(data.replyTo.messageId), threadID);
+
+                    const body = data.text || "";
+                    const event = {
+                        type: isReply ? "message_reply" : "message",
+                        senderID,
+                        threadID,
+                        messageID: String(data.id),
+                        body,
+                        args: body.trim().split(/\s+/).filter(Boolean),
+                        attachments: [], // native attachment mapping not wired yet — media in E2EE groups isn't resolved
+                        mentions: {},
+                        timestamp: data.timestampMs ? Number(data.timestampMs) : Date.now(),
+                        isGroup: true,
+                        isE2EE: true,
+                        participantIDs: []
+                    };
+
+                    if (isReply) {
+                        const replyText = this._msgTextCache.get(String(data.replyTo.messageId)) || "";
+                        event.messageReply = {
+                            messageID: data.replyTo.messageId,
+                            senderID: data.replyTo.senderId || "",
+                            threadID,
+                            body: replyText,
+                            args: replyText.trim().split(/\s+/).filter(Boolean),
+                            isE2EE: true,
+                            isGroup: true,
+                            mentions: {},
+                            attachments: []
+                        };
+                    }
+
+                    if (this._messageCallback) this._messageCallback(null, event);
+                } catch (err) {
+                    logger.error("E2EE", "[native-group] failed to process group message: " +
+                        (err && err.message ? err.message : String(err)));
+                }
             });
-            logger.info("E2EE", "[native-group] listening for native e2eeMessage events (debug mode)");
+            logger.info("E2EE", "[native-group] listening for E2EE group messages via native engine");
         } catch (err) {
             logger.error("E2EE", "[native-group] failed to attach native message listener (non-fatal, DM unaffected): " +
                 (err && err.message ? err.message : String(err)));
@@ -401,6 +461,20 @@ class E2EEBridge {
 
         this._msgThreadMap = this._msgThreadMap || new Map();
         this._msgTextCache = this._msgTextCache || new Map();
+        this._knownE2EEGroups = this._knownE2EEGroups || new Set();
+
+        const isGroup = this._knownE2EEGroups.has(String(threadId));
+
+        if (!attachment && isGroup) {
+            // Vendor's own group Sender-Key encryption is broken (see native-group
+            // listener above) — group text sends go through native instead.
+            const result = await nativeMediaBridge.sendGroupMessage(this.api.getAppState(), threadId, text, replyToMessageId);
+            if (result && result.messageId) {
+                this._msgThreadMap.set(String(result.messageId), threadId);
+                if (text) this._msgTextCache.set(String(result.messageId), text);
+            }
+            return result;
+        }
 
         if (!attachment) {
             const result = await this.client.sendMessage({ threadId, text, replyToMessageId });
@@ -543,6 +617,10 @@ class E2EEBridge {
         if (!buffer) throw new Error("downloadMedia returned no data");
 
         return localMediaServer.serveBuffer(buffer, meta.mimeType);
+    }
+
+    isKnownE2EEGroup(threadId) {
+        return !!(this._knownE2EEGroups && this._knownE2EEGroups.has(String(threadId)));
     }
 
     getKnownThreads() {
