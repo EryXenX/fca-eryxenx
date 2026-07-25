@@ -175,4 +175,15 @@ async function markRead(appState, chatJid, watermarkTs) {
     return client.markAsRead(numericId, watermarkTs ? BigInt(watermarkTs) : undefined);
 }
 
-module.exports = { getClient, sendMedia, sendReaction, unsendMessage, markRead };
+/**
+ * Registers a listener on the native client for a given event name
+ * (e.g. "e2eeMessage", "e2eeReaction"). Used only for GROUP E2EE receiving —
+ * DM receiving continues to use the existing vendor engine, unchanged.
+ */
+async function onNativeEvent(appState, eventName, handler) {
+    const client = await getClient(appState);
+    client.on(eventName, handler);
+    return client;
+}
+
+module.exports = { getClient, sendMedia, sendReaction, unsendMessage, markRead, onNativeEvent };
