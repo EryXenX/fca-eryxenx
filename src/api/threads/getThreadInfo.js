@@ -163,6 +163,39 @@ module.exports = function (defaultFuncs, api, ctx) {
       };
     }
 
+    // E2EE threads never have data in this GraphQL endpoint — it always
+    // throws "No message_thread in GraphQL response". Several onChat
+    // auto-handlers (badwords, count, rankup, shortcut, translate, ...)
+    // each call getThreadInfo on every single message, so without this
+    // short-circuit every E2EE message triggers 5+ guaranteed-failing
+    // network requests, continuously, which adds up under load.
+    if (!Array.isArray(threadID) && api.e2ee && typeof api.e2ee.isConnected === "function" && api.e2ee.isConnected()) {
+      const isE2EEDM = ctx.threadTypes && ctx.threadTypes[String(threadID)] === 'dm';
+      const isE2EEGroup = typeof api.e2ee.isKnownE2EEGroup === "function" && api.e2ee.isKnownE2EEGroup(String(threadID));
+      if (isE2EEDM || isE2EEGroup) {
+        const fallback = {
+          threadID: String(threadID),
+          threadName: null,
+          participantIDs: [],
+          userInfo: [],
+          nicknames: {},
+          unreadCount: 0,
+          messageCount: null,
+          imageSrc: null,
+          emoji: null,
+          color: null,
+          adminIDs: [],
+          approvalMode: null,
+          isGroup: isE2EEGroup,
+          isSubscribed: true,
+          folder: "INBOX",
+          isE2EE: true
+        };
+        callback(null, fallback);
+        return returnPromise;
+      }
+    }
+
     const threadIDs = Array.isArray(threadID) ? threadID.map(String) : [String(threadID)];
 
     const now = Date.now();
