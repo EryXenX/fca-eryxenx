@@ -186,11 +186,11 @@ async function onNativeEvent(appState, eventName, handler) {
     return client;
 }
 
-/** Sends a text message to an E2EE group via the native engine's generic sendMessage. */
+/** Sends a text message to an E2EE group via the native engine's E2EE send. */
 async function sendGroupMessage(appState, chatJid, text, replyToId) {
     const client = await getClient(appState);
     if (typeof chatJid === "string" && chatJid.indexOf("@") === -1) chatJid = chatJid + "@g.us";
-    return client.sendMessage(chatJid, { text, replyToId });
+    return client.sendE2EEMessage(chatJid, text, { replyToId });
 }
 
 module.exports = { getClient, sendMedia, sendReaction, unsendMessage, markRead, onNativeEvent, sendGroupMessage };
