@@ -345,6 +345,27 @@ class E2EEBridge {
 
         this.connected = true;
         logger.success("E2EE", "E2EE active — Signal Protocol / Noise WebSocket (vendored)");
+
+        // GROUP E2EE only: the vendor engine's own group Sender-Key decrypt
+        // has an unresolved bug (repeated "missing sender key state" /
+        // "ciphertext version too old" errors). The native mautrix-go engine
+        // has its own message receiving (e2eeMessage event) that's proven
+        // reliable elsewhere, so we additionally listen there and forward
+        // ONLY group messages through it. DM receiving is untouched — it
+        // still goes exclusively through the vendor engine above, unchanged.
+        try {
+            await nativeMediaBridge.onNativeEvent(this.api.getAppState(), "e2eeMessage", (data) => {
+                try {
+                    console.log("[E2EE-DEBUG] native e2eeMessage:", JSON.stringify(data, (k, v) =>
+                        typeof v === "bigint" ? v.toString() : Buffer.isBuffer(v) ? `<Buffer ${v.length}b>` : v, 2));
+                } catch (_) { console.log("[E2EE-DEBUG] native e2eeMessage (non-serializable):", data); }
+            });
+            logger.info("E2EE", "[native-group] listening for native e2eeMessage events (debug mode)");
+        } catch (err) {
+            logger.error("E2EE", "[native-group] failed to attach native message listener (non-fatal, DM unaffected): " +
+                (err && err.message ? err.message : String(err)));
+        }
+
         return this;
     }
 
