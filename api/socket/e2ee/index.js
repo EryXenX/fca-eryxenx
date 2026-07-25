@@ -18,6 +18,9 @@
 
 const path = require("path");
 const logger = require("../../../utils/nexca-logger");
+const nativeMediaBridge = require("./native/nativeMediaBridge");
+const { decodeIncomingMedia } = require("./mediaDecode");
+const localMediaServer = require("./localMediaServer");
 
 function loadFBClient() {
     try {
@@ -145,7 +148,24 @@ class E2EEBridge {
         });
 
         // Forward incoming E2EE messages to the registered callback.
-        this.client.onEvent("e2ee_message", (msg) => {
+        this.client.onEvent("e2ee_message", async (msg) => {
+            this._senderJidMap = this._senderJidMap || new Map();
+            this._mediaCache = this._mediaCache || new Map();
+            this._msgThreadMap = this._msgThreadMap || new Map();
+            this._msgTextCache = this._msgTextCache || new Map();
+            if (msg.id) this._senderJidMap.set(String(msg.id), msg.senderJid || null);
+            if (msg.id && msg.text) this._msgTextCache.set(String(msg.id), String(msg.text));
+
+            if (msg.kind && msg.kind !== "text" && msg.media) {
+                try {
+                    const meta = decodeIncomingMedia(msg.kind, msg.media);
+                    if (meta) this._mediaCache.set(String(msg.id), meta);
+                } catch (err) {
+                    logger.error("E2EE", "[media-decode] failed to decode incoming " + msg.kind + ": " +
+                        (err && err.message ? err.message : String(err)));
+                }
+            }
+
             if (!this._messageCallback) return;
 
             const senderID =
@@ -163,6 +183,10 @@ class E2EEBridge {
                 return at === -1 ? id : id.slice(0, at);
             }
             const normalizedThreadId = normalizeThreadId(msg.threadId);
+            this._knownE2EEThreads = this._knownE2EEThreads || new Set();
+            this._knownE2EEThreads.add(normalizedThreadId);
+            if (msg.id) this._msgThreadMap.set(String(msg.id), normalizedThreadId);
+            if (msg.replyTo && msg.replyTo.messageId) this._msgThreadMap.set(String(msg.replyTo.messageId), normalizedThreadId);
 
             // Build mentions: vendor surfaces an array [{ id, text }] or object
             var mentions = {};
@@ -175,6 +199,32 @@ class E2EEBridge {
             }
 
             const isReply = !!(msg.replyTo && msg.replyTo.messageId);
+            if (isReply) {
+                try {
+                    console.log("[E2EE-DEBUG] msg.replyTo raw:", JSON.stringify(msg.replyTo, (k, v) => typeof v === "bigint" ? v.toString() : Buffer.isBuffer(v) ? `<Buffer ${v.length}b>` : v));
+                } catch (_) { console.log("[E2EE-DEBUG] msg.replyTo (raw, non-serializable):", msg.replyTo); }
+            }
+            if (msg.kind && msg.kind !== "text") {
+                try {
+                    console.log("[E2EE-DEBUG] msg.kind=" + msg.kind + " msg.media keys:", msg.media ? Object.keys(msg.media) : null);
+                } catch (_) {}
+            }
+            if (msg.kind === "reaction") {
+                try {
+                    console.log("[E2EE-DEBUG] FULL reaction msg dump:", JSON.stringify(msg, (k, v) => typeof v === "bigint" ? v.toString() : Buffer.isBuffer(v) ? `<Buffer ${v.length}b>` : v, 2));
+                } catch (_) { console.log("[E2EE-DEBUG] FULL reaction msg (non-serializable):", msg); }
+
+                this._messageCallback(null, {
+                    type: "message_reaction",
+                    threadID: normalizedThreadId,
+                    messageID: msg.targetId,
+                    reaction: msg.reaction,
+                    senderID: msg.senderId || senderID,
+                    userID: msg.senderId || senderID,
+                    isE2EE: true
+                });
+                return;
+            }
 
             const event = {
                 type:        isReply ? "message_reply" : "message",
@@ -200,22 +250,90 @@ class E2EEBridge {
                 this.ctx.threadTypes[String(normalizedThreadId)] = 'dm';
             }
 
+            // Eagerly resolve any E2EE media on this message itself.
+            const ownMeta = this._mediaCache.get(String(msg.id));
+            if (ownMeta) {
+                try {
+                    const url = await this.resolveAttachment(ownMeta);
+                    event.attachments = [{
+                        type: ownMeta.kind === "image" ? "photo" : ownMeta.kind === "video" ? "video" : ownMeta.kind === "audio" ? "audio" : "file",
+                        ID: event.messageID,
+                        url,
+                        isE2EE: true,
+                        filename: ownMeta.fileName,
+                        width: ownMeta.width,
+                        height: ownMeta.height
+                    }];
+                } catch (err) {
+                    logger.error("E2EE", "[media-resolve] failed to resolve own attachment: " + (err && err.message ? err.message : String(err)));
+                }
+            }
+
             // Populate messageReply so reply handlers work the same as in MQTT
             if (isReply) {
+                const replyText = msg.replyTo.text || this._msgTextCache.get(String(msg.replyTo.messageId)) || "";
                 event.messageReply = {
                     messageID: msg.replyTo.messageId,
                     senderID:  msg.replyTo.senderId || "",
                     threadID:  normalizedThreadId,
-                    body:      msg.replyTo.text || "",
-                    args:      (msg.replyTo.text || "").trim().split(/\s+/).filter(Boolean),
+                    body:      replyText,
+                    args:      replyText.trim().split(/\s+/).filter(Boolean),
                     isE2EE:    true,
                     isGroup:   !!msg.isGroup,
                     mentions:  {},
                     attachments: []
                 };
+
+                // Resolve the ORIGINAL message's media (if any) from cache — this
+                // is what makes reply-based commands like imgur.js work in E2EE.
+                const repliedMeta = this._mediaCache.get(String(msg.replyTo.messageId));
+                if (repliedMeta) {
+                    try {
+                        const url = await this.resolveAttachment(repliedMeta);
+                        event.messageReply.attachments = [{
+                            type: repliedMeta.kind === "image" ? "photo" : repliedMeta.kind === "video" ? "video" : repliedMeta.kind === "audio" ? "audio" : "file",
+                            ID: msg.replyTo.messageId,
+                            url,
+                            isE2EE: true,
+                            filename: repliedMeta.fileName,
+                            width: repliedMeta.width,
+                            height: repliedMeta.height
+                        }];
+                    } catch (err) {
+                        logger.error("E2EE", "[media-resolve] failed to resolve replied attachment: " + (err && err.message ? err.message : String(err)));
+                    }
+                }
             }
 
             this._messageCallback(null, event);
+        });
+
+        // Incoming E2EE reactions — needed for onReaction handlers (e.g. a
+        // reaction-triggered unsend feature) to fire in encrypted threads.
+        this.client.onEvent("e2ee_reaction", (r) => {
+            console.log("[E2EE-DEBUG] e2ee_reaction fired:", JSON.stringify(r, (k, v) => typeof v === "bigint" ? v.toString() : v));
+            if (!this._messageCallback) return;
+            const threadID = r.chatJid ? String(r.chatJid).split("@")[0].split(".")[0] : "";
+            const senderID = r.senderId || (r.senderJid ? String(r.senderJid).split(".")[0] : "");
+            this._messageCallback(null, {
+                type: "message_reaction",
+                threadID,
+                messageID: r.messageId,
+                reaction: r.reaction,
+                senderID,
+                userID: senderID,
+                isE2EE: true
+            });
+        });
+
+        // Catch-all: log any E2EE event type we haven't explicitly handled,
+        // so we can see the real event name if our assumptions above are wrong.
+        this.client.onEvent((evt) => {
+            const known = ["e2ee_message", "e2ee_reaction", "connected", "disconnected", "error",
+                "e2ee_receipt", "read_receipt", "presence", "reaction"];
+            if (evt && !known.includes(evt.type)) {
+                console.log("[E2EE-DEBUG] unhandled event type:", evt.type, "data keys:", evt.data ? Object.keys(evt.data) : null);
+            }
         });
 
         // Surface connection errors so the bot log shows them.
@@ -227,6 +345,27 @@ class E2EEBridge {
 
         this.connected = true;
         logger.success("E2EE", "E2EE active — Signal Protocol / Noise WebSocket (vendored)");
+
+        // GROUP E2EE only: the vendor engine's own group Sender-Key decrypt
+        // has an unresolved bug (repeated "missing sender key state" /
+        // "ciphertext version too old" errors). The native mautrix-go engine
+        // has its own message receiving (e2eeMessage event) that's proven
+        // reliable elsewhere, so we additionally listen there and forward
+        // ONLY group messages through it. DM receiving is untouched — it
+        // still goes exclusively through the vendor engine above, unchanged.
+        try {
+            await nativeMediaBridge.onNativeEvent(this.api.getAppState(), "e2eeMessage", (data) => {
+                try {
+                    console.log("[E2EE-DEBUG] native e2eeMessage:", JSON.stringify(data, (k, v) =>
+                        typeof v === "bigint" ? v.toString() : Buffer.isBuffer(v) ? `<Buffer ${v.length}b>` : v, 2));
+                } catch (_) { console.log("[E2EE-DEBUG] native e2eeMessage (non-serializable):", data); }
+            });
+            logger.info("E2EE", "[native-group] listening for native e2eeMessage events (debug mode)");
+        } catch (err) {
+            logger.error("E2EE", "[native-group] failed to attach native message listener (non-fatal, DM unaffected): " +
+                (err && err.message ? err.message : String(err)));
+        }
+
         return this;
     }
 
@@ -260,8 +399,16 @@ class E2EEBridge {
         const text = typeof msg === "string" ? msg : (msg && msg.body != null ? String(msg.body) : "");
         const attachment = (msg && typeof msg === "object") ? (msg.attachment || null) : null;
 
+        this._msgThreadMap = this._msgThreadMap || new Map();
+        this._msgTextCache = this._msgTextCache || new Map();
+
         if (!attachment) {
-            return this.client.sendMessage({ threadId, text, replyToMessageId });
+            const result = await this.client.sendMessage({ threadId, text, replyToMessageId });
+            if (result && result.messageId) {
+                this._msgThreadMap.set(String(result.messageId), threadId);
+                if (text) this._msgTextCache.set(String(result.messageId), text);
+            }
+            return result;
         }
 
         // Always use the vendor's Noise WebSocket path for attachments.
@@ -296,37 +443,145 @@ class E2EEBridge {
                     fileName = fileName || "file.bin";
                     mimeType = mimeType || "application/octet-stream";
                 }
+            } else if (mimeType.startsWith("image/") || mimeType.startsWith("video/") || mimeType.startsWith("audio/")) {
+                // File extension can lie about actual content (e.g. a JPEG saved
+                // with a .png name) — verify against the real bytes and correct
+                // mimeType if they disagree, since that also feeds dimension parsing.
+                const sniffed = _sniffMime(data);
+                if (sniffed && sniffed.mimeType !== mimeType) {
+                    logger.error("E2EE", `[media-mismatch] filename says ${mimeType} but content is actually ${sniffed.mimeType} (${fileName}) — using real content type`);
+                    mimeType = sniffed.mimeType;
+                }
             }
 
             const dims = mimeType.startsWith("image/") ? _getImageDimensions(data, mimeType) : null;
-            const input = {
-                threadId, data, fileName, mimeType,
-                caption: text || undefined, replyToMessageId,
-                width: dims ? dims.width : undefined,
-                height: dims ? dims.height : undefined
-            };
 
-            console.log(`[E2EEBridge] sendMessage attachment: fileName=${fileName}, mimeType=${mimeType}, size=${data.length} bytes, dims=${dims ? dims.width + "x" + dims.height : "n/a"}, threadId=${threadId}`);
+            console.log(`[E2EEBridge] sendMessage attachment (native engine): fileName=${fileName}, mimeType=${mimeType}, size=${data.length} bytes, dims=${dims ? dims.width + "x" + dims.height : "n/a"}, threadId=${threadId}`);
+
+            let mediaType;
+            if (mimeType.startsWith("image/")) mediaType = "image";
+            else if (mimeType.startsWith("video/")) mediaType = "video";
+            else if (mimeType.startsWith("audio/")) mediaType = "audio";
+            else mediaType = "document";
+
+            const appState = this.api.getAppState();
             let result;
-            if (mimeType.startsWith("image/")) {
-                result = await this.client.sendImage(input);
-            } else if (mimeType.startsWith("video/")) {
-                result = await this.client.sendVideo(input);
-            } else if (mimeType.startsWith("audio/")) {
-                result = await this.client.sendAudio(input);
-            } else {
-                result = await this.client.sendFile(input);
+            try {
+                result = await nativeMediaBridge.sendMedia(appState, threadId, mediaType, data, mimeType, {
+                    caption: text || undefined,
+                    width: dims ? dims.width : undefined,
+                    height: dims ? dims.height : undefined,
+                    fileName,
+                    replyToId: replyToMessageId
+                });
+            } catch (nativeErr) {
+                logger.error("E2EE", "[native-media] send failed, falling back to legacy vendor engine: " +
+                    (nativeErr && nativeErr.message ? nativeErr.message : String(nativeErr)));
+                const input = { threadId, data, fileName, mimeType, caption: text || undefined, replyToMessageId,
+                    width: dims ? dims.width : undefined, height: dims ? dims.height : undefined };
+                if (mediaType === "image") result = await this.client.sendImage(input);
+                else if (mediaType === "video") result = await this.client.sendVideo(input);
+                else if (mediaType === "audio") result = await this.client.sendAudio(input);
+                else result = await this.client.sendFile(input);
             }
-            console.log(`[E2EEBridge] send result:`, JSON.stringify(result));
+            try {
+                console.log(`[E2EEBridge] send result:`, JSON.stringify(result, (k, v) => typeof v === "bigint" ? v.toString() : v));
+            } catch (_) { console.log(`[E2EEBridge] send result (non-serializable):`, result); }
+            if (result && result.messageId) {
+                this._msgThreadMap.set(String(result.messageId), threadId);
+                // Cache our own sent media so replies to it (e.g. "/imgur" replying
+                // to a /pp response) can be resolved without a CDN round-trip —
+                // we already have the plaintext bytes right here.
+                this._mediaCache = this._mediaCache || new Map();
+                this._mediaCache.set(String(result.messageId), {
+                    kind: mediaType,
+                    localBuffer: data,
+                    mimeType,
+                    fileName,
+                    width: dims ? dims.width : undefined,
+                    height: dims ? dims.height : undefined
+                });
+            }
             results.push(result);
         }
 
         return results.length === 1 ? results[0] : results;
     }
 
+    /**
+     * Downloads + decrypts an incoming E2EE media attachment and returns a
+     * short-lived local HTTP URL for it (so existing GoatBot commands that
+     * do axios.get(attachment.url) work unmodified).
+     */
+    async resolveAttachment(meta) {
+        if (!meta) throw new Error("Invalid E2EE attachment metadata");
+
+        // Our own sent media — we already have the plaintext bytes.
+        if (meta.localBuffer) {
+            return localMediaServer.serveBuffer(meta.localBuffer, meta.mimeType);
+        }
+
+        if (!meta.directPath || !meta.mediaKey) throw new Error("Invalid E2EE attachment metadata");
+
+        // directPath from the message is host-relative (e.g. "/v/t800.../x.enc?...").
+        // The exact CDN host Messenger's own client resolves this against isn't
+        // captured anywhere in the decoded message — this default is a
+        // best-effort guess and can be overridden via env if it turns out wrong.
+        const host = process.env.FB_E2EE_MEDIA_DOWNLOAD_HOST || "rupload.facebook.com";
+        const fullUrl = meta.directPath.startsWith("http") ? meta.directPath : `https://${host}${meta.directPath}`;
+
+        const result = await this.client.downloadMedia({
+            directPath: fullUrl,
+            mediaKey: Buffer.from(meta.mediaKey).toString("base64"),
+            mediaSha256: meta.fileSHA256 ? Buffer.from(meta.fileSHA256).toString("base64") : undefined,
+            mediaEncSha256: meta.fileEncSHA256 ? Buffer.from(meta.fileEncSHA256).toString("base64") : undefined,
+            mediaType: meta.kind,
+            mimeType: meta.mimeType
+        });
+
+        const buffer = Buffer.isBuffer(result) ? result : (result && result.data ? result.data : null);
+        if (!buffer) throw new Error("downloadMedia returned no data");
+
+        return localMediaServer.serveBuffer(buffer, meta.mimeType);
+    }
+
+    getKnownThreads() {
+        return this._knownE2EEThreads ? Array.from(this._knownE2EEThreads) : [];
+    }
+
+    async markRead(threadId, watermarkTs) {
+        this.ensureConnected();
+        return nativeMediaBridge.markRead(this.api.getAppState(), threadId, watermarkTs);
+    }
+
+    getThreadIdForMessage(messageId) {
+        return (this._msgThreadMap && this._msgThreadMap.get(String(messageId))) || undefined;
+    }
+
+    getSenderJid(messageId) {
+        return (this._senderJidMap && this._senderJidMap.get(String(messageId))) || undefined;
+    }
+
     async sendReaction(threadId, messageId, reaction, senderJid) {
         this.ensureConnected();
-        return this.client.sendReaction({ threadId, messageId, reaction, senderJid });
+        if (!senderJid) senderJid = this.getSenderJid(messageId);
+        console.log(`[E2EE-DEBUG] sendReaction called: threadId=${threadId}, messageId=${messageId}, reaction=${reaction}, senderJid=${senderJid}`);
+        try {
+            const result = await nativeMediaBridge.sendReaction(this.api.getAppState(), threadId, messageId, senderJid, reaction);
+            console.log(`[E2EE-DEBUG] sendReaction native result:`, JSON.stringify(result, (k, v) => typeof v === "bigint" ? v.toString() : v));
+            return result;
+        } catch (err) {
+            console.log(`[E2EE-DEBUG] sendReaction native FAILED:`, err && err.stack ? err.stack : String(err));
+            logger.error("E2EE", "[native-media] reaction failed, falling back to legacy engine: " + (err && err.message ? err.message : String(err)));
+            try {
+                const fbResult = await this.client.sendReaction({ threadId, messageId, reaction, senderJid });
+                console.log(`[E2EE-DEBUG] sendReaction legacy fallback result:`, JSON.stringify(fbResult, (k, v) => typeof v === "bigint" ? v.toString() : v));
+                return fbResult;
+            } catch (fbErr) {
+                console.log(`[E2EE-DEBUG] sendReaction legacy fallback ALSO FAILED:`, fbErr && fbErr.stack ? fbErr.stack : String(fbErr));
+                throw fbErr;
+            }
+        }
     }
 
     async sendTyping(threadId, isTyping) {
@@ -336,7 +591,12 @@ class E2EEBridge {
 
     async unsendMessage(messageId, threadId) {
         this.ensureConnected();
-        return this.client.unsendMessage({ messageId, threadId });
+        try {
+            return await nativeMediaBridge.unsendMessage(this.api.getAppState(), threadId, messageId);
+        } catch (err) {
+            logger.error("E2EE", "[native-media] unsend failed, falling back to legacy engine: " + (err && err.message ? err.message : String(err)));
+            return this.client.unsendMessage({ messageId, threadId });
+        }
     }
 
     async editMessage(threadId, messageId, newText) {
@@ -423,6 +683,20 @@ function _sniffMime(buf) {
     if (buf.slice(4, 8).toString("ascii") === "ftyp") {
         var brand = buf.slice(8, 12).toString("ascii");
         if (brand.indexOf("M4A") !== -1) return { mimeType: "audio/mp4", ext: "m4a" };
+
+        // Brand alone is unreliable for audio-only files (common brands like
+        // "isom"/"mp42" are used for both). Scan for 'hdlr' boxes and check
+        // the handler type ('vide' = has a video track, 'soun' = audio only).
+        var hasVideoTrack = false, hasAudioTrack = false;
+        var idx = 0;
+        while ((idx = buf.indexOf("hdlr", idx, "ascii")) !== -1) {
+            var handlerType = buf.slice(idx + 8, idx + 12).toString("ascii");
+            if (handlerType === "vide") hasVideoTrack = true;
+            if (handlerType === "soun") hasAudioTrack = true;
+            idx += 4;
+        }
+        if (hasVideoTrack) return { mimeType: "video/mp4", ext: "mp4" };
+        if (hasAudioTrack) return { mimeType: "audio/mp4", ext: "m4a" };
         return { mimeType: "video/mp4", ext: "mp4" };
     }
 
