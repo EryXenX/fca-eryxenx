@@ -22,6 +22,19 @@ const nativeMediaBridge = require("./native/nativeMediaBridge");
 const { decodeIncomingMedia } = require("./mediaDecode");
 const localMediaServer = require("./localMediaServer");
 
+// Simple FIFO-bounded Map.set — evicts the oldest entry once maxSize is
+// exceeded, so long-lived per-message caches (media buffers, thread/sender
+// lookups) can't grow unbounded over a multi-hour/overnight process
+// lifetime and eventually get OOM-killed.
+function boundedSet(map, key, value, maxSize) {
+    if (map.size >= maxSize && !map.has(key)) {
+        const oldestKey = map.keys().next().value;
+        map.delete(oldestKey);
+    }
+    map.set(key, value);
+    return map;
+}
+
 function loadFBClient() {
     try {
         // Pre-compiled from HerokeyVN/FB-Messenger-E2EE (fb-messenger-e2ee).
@@ -153,13 +166,13 @@ class E2EEBridge {
             this._mediaCache = this._mediaCache || new Map();
             this._msgThreadMap = this._msgThreadMap || new Map();
             this._msgTextCache = this._msgTextCache || new Map();
-            if (msg.id) this._senderJidMap.set(String(msg.id), msg.senderJid || null);
-            if (msg.id && msg.text) this._msgTextCache.set(String(msg.id), String(msg.text));
+            if (msg.id) boundedSet(this._senderJidMap, String(msg.id), msg.senderJid || null, 500);
+            if (msg.id && msg.text) boundedSet(this._msgTextCache, String(msg.id), String(msg.text), 500);
 
             if (msg.kind && msg.kind !== "text" && msg.media) {
                 try {
                     const meta = decodeIncomingMedia(msg.kind, msg.media);
-                    if (meta) this._mediaCache.set(String(msg.id), meta);
+                    if (meta) boundedSet(this._mediaCache, String(msg.id), meta, 50);
                 } catch (err) {
                     logger.error("E2EE", "[media-decode] failed to decode incoming " + msg.kind + ": " +
                         (err && err.message ? err.message : String(err)));
@@ -185,8 +198,8 @@ class E2EEBridge {
             const normalizedThreadId = normalizeThreadId(msg.threadId);
             this._knownE2EEThreads = this._knownE2EEThreads || new Set();
             this._knownE2EEThreads.add(normalizedThreadId);
-            if (msg.id) this._msgThreadMap.set(String(msg.id), normalizedThreadId);
-            if (msg.replyTo && msg.replyTo.messageId) this._msgThreadMap.set(String(msg.replyTo.messageId), normalizedThreadId);
+            if (msg.id) boundedSet(this._msgThreadMap, String(msg.id), normalizedThreadId, 500);
+            if (msg.replyTo && msg.replyTo.messageId) boundedSet(this._msgThreadMap, String(msg.replyTo.messageId), normalizedThreadId, 500);
 
             // Build mentions: vendor surfaces an array [{ id, text }] or object
             var mentions = {};
@@ -326,15 +339,12 @@ class E2EEBridge {
             });
         });
 
-        // Catch-all: log any E2EE event type we haven't explicitly handled,
-        // so we can see the real event name if our assumptions above are wrong.
-        this.client.onEvent((evt) => {
-            const known = ["e2ee_message", "e2ee_reaction", "connected", "disconnected", "error",
-                "e2ee_receipt", "read_receipt", "presence", "reaction"];
-            if (evt && !known.includes(evt.type)) {
-                console.log("[E2EE-DEBUG] unhandled event type:", evt.type, "data keys:", evt.data ? Object.keys(evt.data) : null);
-            }
-        });
+        // (Removed: catch-all debug event logger. It served its purpose while
+        // discovering the native engine's event shapes — message, typing,
+        // reaction, message_unsend, read_receipt, e2ee_receipt, presence are
+        // all known now. Leaving it running printed thousands of lines/hour
+        // for every typing indicator across all active threads, which added
+        // unnecessary CPU/memory overhead over a multi-hour uptime.)
 
         // Surface connection errors so the bot log shows them.
         // Silently ignore DuplicatedMessage errors — these are harmless replays on reconnect.
@@ -374,14 +384,14 @@ class E2EEBridge {
                     this._senderJidMap = this._senderJidMap || new Map();
                     this._knownE2EEThreads = this._knownE2EEThreads || new Set();
                     this._knownE2EEGroups = this._knownE2EEGroups || new Set();
-                    this._msgThreadMap.set(String(data.id), threadID);
-                    if (data.text) this._msgTextCache.set(String(data.id), String(data.text));
-                    this._senderJidMap.set(String(data.id), data.senderJid || null);
+                    boundedSet(this._msgThreadMap, String(data.id), threadID, 500);
+                    if (data.text) boundedSet(this._msgTextCache, String(data.id), String(data.text), 500);
+                    boundedSet(this._senderJidMap, String(data.id), data.senderJid || null, 500);
                     this._knownE2EEThreads.add(threadID);
                     this._knownE2EEGroups.add(threadID);
 
                     const isReply = !!(data.replyTo && data.replyTo.messageId);
-                    if (isReply) this._msgThreadMap.set(String(data.replyTo.messageId), threadID);
+                    if (isReply) boundedSet(this._msgThreadMap, String(data.replyTo.messageId), threadID, 500);
 
                     const body = data.text || "";
                     const event = {
@@ -470,8 +480,8 @@ class E2EEBridge {
             // listener above) — group text sends go through native instead.
             const result = await nativeMediaBridge.sendGroupMessage(this.api.getAppState(), threadId, text, replyToMessageId);
             if (result && result.messageId) {
-                this._msgThreadMap.set(String(result.messageId), threadId);
-                if (text) this._msgTextCache.set(String(result.messageId), text);
+                boundedSet(this._msgThreadMap, String(result.messageId), threadId, 500);
+                if (text) boundedSet(this._msgTextCache, String(result.messageId), text, 500);
             }
             return result;
         }
@@ -479,8 +489,8 @@ class E2EEBridge {
         if (!attachment) {
             const result = await this.client.sendMessage({ threadId, text, replyToMessageId });
             if (result && result.messageId) {
-                this._msgThreadMap.set(String(result.messageId), threadId);
-                if (text) this._msgTextCache.set(String(result.messageId), text);
+                boundedSet(this._msgThreadMap, String(result.messageId), threadId, 500);
+                if (text) boundedSet(this._msgTextCache, String(result.messageId), text, 500);
             }
             return result;
         }
@@ -562,19 +572,19 @@ class E2EEBridge {
                 console.log(`[E2EEBridge] send result:`, JSON.stringify(result, (k, v) => typeof v === "bigint" ? v.toString() : v));
             } catch (_) { console.log(`[E2EEBridge] send result (non-serializable):`, result); }
             if (result && result.messageId) {
-                this._msgThreadMap.set(String(result.messageId), threadId);
+                boundedSet(this._msgThreadMap, String(result.messageId), threadId, 500);
                 // Cache our own sent media so replies to it (e.g. "/imgur" replying
                 // to a /pp response) can be resolved without a CDN round-trip —
                 // we already have the plaintext bytes right here.
                 this._mediaCache = this._mediaCache || new Map();
-                this._mediaCache.set(String(result.messageId), {
+                boundedSet(this._mediaCache, String(result.messageId), {
                     kind: mediaType,
                     localBuffer: data,
                     mimeType,
                     fileName,
                     width: dims ? dims.width : undefined,
                     height: dims ? dims.height : undefined
-                });
+                }, 50);
             }
             results.push(result);
         }
