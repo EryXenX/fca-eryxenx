@@ -22,6 +22,23 @@
 const path = require("path");
 const logger = require("../../../../utils/nexca-logger");
 
+const NATIVE_CALL_TIMEOUT_MS = 15000;
+
+/**
+ * Wraps a native-engine call with a hard timeout. A hung native call (e.g.
+ * a stuck getDeviceList/usync query) was observed blocking the whole
+ * process — including the unrelated MQTT connection — for 80+ seconds,
+ * taking down the entire bot (all threads, not just the one send). This
+ * makes any single native call fail fast instead of hanging indefinitely.
+ */
+function withTimeout(promise, label) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`native ${label} timed out after ${NATIVE_CALL_TIMEOUT_MS}ms`)), NATIVE_CALL_TIMEOUT_MS);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 let _clientPromise = null;
 let _client = null;
 
@@ -86,8 +103,18 @@ async function getClient(appState) {
         });
         client.on("disconnected", () => {
             logger.warn("E2EE", "[native-media] native client disconnected, will reconnect on next send");
+            const staleClient = _client;
             _client = null;
             _clientPromise = null;
+            // Release the native (Go-side) handle for the stale connection —
+            // this is off-heap memory that Node's GC can never reclaim on its
+            // own; without this call it leaks permanently on every reconnect.
+            if (staleClient && typeof staleClient.disconnect === "function") {
+                staleClient.disconnect().catch((err) => {
+                    logger.warn("E2EE", "[native-media] failed to release stale native handle: " +
+                        (err && err.message ? err.message : String(err)));
+                });
+            }
         });
 
         _client = client;
@@ -124,28 +151,28 @@ async function sendMedia(appState, chatJid, mediaType, data, mimeType, opts) {
 
     switch (mediaType) {
         case "image":
-            return client.sendE2EEImage(chatJid, data, mimeType || "image/jpeg", {
+            return withTimeout(client.sendE2EEImage(chatJid, data, mimeType || "image/jpeg", {
                 caption: opts.caption, width: opts.width, height: opts.height,
                 replyToId: opts.replyToId, replyToSenderJid: opts.replyToSenderJid
-            });
+            }), "sendE2EEImage");
         case "video":
-            return client.sendE2EEVideo(chatJid, data, mimeType || "video/mp4", {
+            return withTimeout(client.sendE2EEVideo(chatJid, data, mimeType || "video/mp4", {
                 caption: opts.caption, width: opts.width, height: opts.height,
                 duration: opts.duration,
                 replyToId: opts.replyToId, replyToSenderJid: opts.replyToSenderJid
-            });
+            }), "sendE2EEVideo");
         case "audio":
-            return client.sendE2EEAudio(chatJid, data, mimeType || "audio/ogg; codecs=opus", {
+            return withTimeout(client.sendE2EEAudio(chatJid, data, mimeType || "audio/ogg; codecs=opus", {
                 ptt: false, duration: opts.duration,
                 replyToId: opts.replyToId, replyToSenderJid: opts.replyToSenderJid
-            });
+            }), "sendE2EEAudio");
         case "document":
         default:
-            return client.sendE2EEDocument(
+            return withTimeout(client.sendE2EEDocument(
                 chatJid, data, opts.fileName || "file.bin",
                 mimeType || "application/octet-stream",
                 { replyToId: opts.replyToId, replyToSenderJid: opts.replyToSenderJid }
-            );
+            ), "sendE2EEDocument");
     }
 }
 
@@ -156,14 +183,14 @@ async function sendMedia(appState, chatJid, mediaType, data, mimeType, opts) {
 async function sendReaction(appState, chatJid, messageId, senderJid, emoji) {
     const client = await getClient(appState);
     if (typeof chatJid === "string" && chatJid.indexOf("@") === -1) chatJid = chatJid + "@msgr";
-    return client.sendE2EEReaction(chatJid, messageId, senderJid, emoji || "");
+    return withTimeout(client.sendE2EEReaction(chatJid, messageId, senderJid, emoji || ""), "sendE2EEReaction");
 }
 
 /** Unsends/revokes an E2EE message via the native engine. */
 async function unsendMessage(appState, chatJid, messageId) {
     const client = await getClient(appState);
     if (typeof chatJid === "string" && chatJid.indexOf("@") === -1) chatJid = chatJid + "@msgr";
-    return client.unsendE2EEMessage(chatJid, messageId);
+    return withTimeout(client.unsendE2EEMessage(chatJid, messageId), "unsendE2EEMessage");
 }
 
 /** Marks an E2EE thread as read via the native engine. */
@@ -172,7 +199,7 @@ async function markRead(appState, chatJid, watermarkTs) {
     // Unlike other native functions, MxMarkRead's threadId field is int64,
     // not a JID string — strip any "@..." suffix and pass a plain number.
     const numericId = typeof chatJid === "string" ? Number(chatJid.split("@")[0]) : Number(chatJid);
-    return client.markAsRead(numericId, watermarkTs ? BigInt(watermarkTs) : undefined);
+    return withTimeout(client.markAsRead(numericId, watermarkTs ? BigInt(watermarkTs) : undefined), "markAsRead");
 }
 
 /**
@@ -190,7 +217,7 @@ async function onNativeEvent(appState, eventName, handler) {
 async function sendGroupMessage(appState, chatJid, text, replyToId) {
     const client = await getClient(appState);
     if (typeof chatJid === "string" && chatJid.indexOf("@") === -1) chatJid = chatJid + "@g.us";
-    return client.sendE2EEMessage(chatJid, text, { replyToId });
+    return withTimeout(client.sendE2EEMessage(chatJid, text, { replyToId }), "sendE2EEMessage(group)");
 }
 
 module.exports = { getClient, sendMedia, sendReaction, unsendMessage, markRead, onNativeEvent, sendGroupMessage };
