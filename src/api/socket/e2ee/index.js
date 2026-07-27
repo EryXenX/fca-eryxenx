@@ -356,6 +356,23 @@ class E2EEBridge {
         this.connected = true;
         logger.success("E2EE", "E2EE active — Signal Protocol / Noise WebSocket (vendored)");
 
+        // Diagnostic: log memory + internal cache sizes every 10 min so a
+        // future OOM can be correlated against actual growth data instead of
+        // guessing which structure is leaking.
+        if (!this._memDiagInterval) {
+            this._memDiagInterval = setInterval(() => {
+                try {
+                    const mem = process.memoryUsage();
+                    const fmtMB = (b) => (b / 1024 / 1024).toFixed(1) + "MB";
+                    console.log(`[MEM-DIAG] rss=${fmtMB(mem.rss)} heapUsed=${fmtMB(mem.heapUsed)} heapTotal=${fmtMB(mem.heapTotal)} external=${fmtMB(mem.external)} arrayBuffers=${fmtMB(mem.arrayBuffers || 0)}`);
+                    console.log(`[MEM-DIAG] caches: mediaCache=${this._mediaCache ? this._mediaCache.size : 0} msgThreadMap=${this._msgThreadMap ? this._msgThreadMap.size : 0} msgTextCache=${this._msgTextCache ? this._msgTextCache.size : 0} senderJidMap=${this._senderJidMap ? this._senderJidMap.size : 0} seenGroupMsgIds=${this._seenGroupMsgIds ? this._seenGroupMsgIds.size : 0} knownThreads=${this._knownE2EEThreads ? this._knownE2EEThreads.size : 0} knownGroups=${this._knownE2EEGroups ? this._knownE2EEGroups.size : 0} localMediaServerCache=${localMediaServer.getCacheSize()}`);
+                } catch (err) {
+                    console.log("[MEM-DIAG] logging failed:", err && err.message ? err.message : err);
+                }
+            }, 10 * 60 * 1000);
+            this._memDiagInterval.unref();
+        }
+
         // GROUP E2EE only: the vendor engine's own group Sender-Key decrypt
         // has an unresolved bug (repeated "missing sender key state" /
         // "ciphertext version too old" errors). The native mautrix-go engine
