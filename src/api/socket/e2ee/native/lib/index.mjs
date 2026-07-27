@@ -31,49 +31,63 @@ if (!fs.existsSync(LIB_FILE)) {
 }
 var lib = koffi.load(LIB_FILE);
 var mk = /* @__PURE__ */ __name((ret, name, args) => lib.func(name, ret, args), "mk");
+
+// The Go binary heap-allocates every returned JSON string; koffi's plain
+// "str" return type copies it into a JS string but never frees the original
+// C buffer. Without freeing it via MxFreeCString, every single native call
+// (which, for a busy bot, happens very frequently — every message, typing
+// indicator, receipt, send, etc.) leaked native memory that Node's GC can
+// never see, causing slow, steady RSS growth to an eventual OOM kill after
+// several hours of uptime. koffi's disposable() type calls the destructor
+// automatically right after copying the string, fixing this at the root.
+var _rawMxFreeCString = mk("void", "MxFreeCString", ["char*"]);
+var MxString = koffi.disposable("MxString", "str", (ptr) => {
+  try { _rawMxFreeCString(ptr); } catch (_) { /* best-effort */ }
+});
+
 var fns = {
-  MxFreeCString: mk("void", "MxFreeCString", ["char*"]),
-  MxNewClient: mk("str", "MxNewClient", ["str"]),
-  MxConnect: mk("str", "MxConnect", ["str"]),
-  MxConnectE2EE: mk("str", "MxConnectE2EE", ["str"]),
-  MxDisconnect: mk("str", "MxDisconnect", ["str"]),
-  MxIsConnected: mk("str", "MxIsConnected", ["str"]),
-  MxSendMessage: mk("str", "MxSendMessage", ["str"]),
-  MxSendReaction: mk("str", "MxSendReaction", ["str"]),
-  MxEditMessage: mk("str", "MxEditMessage", ["str"]),
-  MxUnsendMessage: mk("str", "MxUnsendMessage", ["str"]),
-  MxSendTyping: mk("str", "MxSendTyping", ["str"]),
-  MxMarkRead: mk("str", "MxMarkRead", ["str"]),
-  MxUploadMedia: mk("str", "MxUploadMedia", ["str"]),
-  MxSendImage: mk("str", "MxSendImage", ["str"]),
-  MxSendVideo: mk("str", "MxSendVideo", ["str"]),
-  MxSendVoice: mk("str", "MxSendVoice", ["str"]),
-  MxSendFile: mk("str", "MxSendFile", ["str"]),
-  MxSendSticker: mk("str", "MxSendSticker", ["str"]),
-  MxCreateThread: mk("str", "MxCreateThread", ["str"]),
-  MxGetUserInfo: mk("str", "MxGetUserInfo", ["str"]),
-  MxSetGroupPhoto: mk("str", "MxSetGroupPhoto", ["str"]),
-  MxRenameThread: mk("str", "MxRenameThread", ["str"]),
-  MxMuteThread: mk("str", "MxMuteThread", ["str"]),
-  MxDeleteThread: mk("str", "MxDeleteThread", ["str"]),
-  MxSearchUsers: mk("str", "MxSearchUsers", ["str"]),
-  MxPollEvents: mk("str", "MxPollEvents", ["str"]),
-  MxSendE2EEMessage: mk("str", "MxSendE2EEMessage", ["str"]),
-  MxSendE2EEReaction: mk("str", "MxSendE2EEReaction", ["str"]),
-  MxSendE2EETyping: mk("str", "MxSendE2EETyping", ["str"]),
-  MxEditE2EEMessage: mk("str", "MxEditE2EEMessage", ["str"]),
-  MxUnsendE2EEMessage: mk("str", "MxUnsendE2EEMessage", ["str"]),
-  MxGetDeviceData: mk("str", "MxGetDeviceData", ["str"]),
+  MxFreeCString: _rawMxFreeCString,
+  MxNewClient: mk(MxString, "MxNewClient", ["str"]),
+  MxConnect: mk(MxString, "MxConnect", ["str"]),
+  MxConnectE2EE: mk(MxString, "MxConnectE2EE", ["str"]),
+  MxDisconnect: mk(MxString, "MxDisconnect", ["str"]),
+  MxIsConnected: mk(MxString, "MxIsConnected", ["str"]),
+  MxSendMessage: mk(MxString, "MxSendMessage", ["str"]),
+  MxSendReaction: mk(MxString, "MxSendReaction", ["str"]),
+  MxEditMessage: mk(MxString, "MxEditMessage", ["str"]),
+  MxUnsendMessage: mk(MxString, "MxUnsendMessage", ["str"]),
+  MxSendTyping: mk(MxString, "MxSendTyping", ["str"]),
+  MxMarkRead: mk(MxString, "MxMarkRead", ["str"]),
+  MxUploadMedia: mk(MxString, "MxUploadMedia", ["str"]),
+  MxSendImage: mk(MxString, "MxSendImage", ["str"]),
+  MxSendVideo: mk(MxString, "MxSendVideo", ["str"]),
+  MxSendVoice: mk(MxString, "MxSendVoice", ["str"]),
+  MxSendFile: mk(MxString, "MxSendFile", ["str"]),
+  MxSendSticker: mk(MxString, "MxSendSticker", ["str"]),
+  MxCreateThread: mk(MxString, "MxCreateThread", ["str"]),
+  MxGetUserInfo: mk(MxString, "MxGetUserInfo", ["str"]),
+  MxSetGroupPhoto: mk(MxString, "MxSetGroupPhoto", ["str"]),
+  MxRenameThread: mk(MxString, "MxRenameThread", ["str"]),
+  MxMuteThread: mk(MxString, "MxMuteThread", ["str"]),
+  MxDeleteThread: mk(MxString, "MxDeleteThread", ["str"]),
+  MxSearchUsers: mk(MxString, "MxSearchUsers", ["str"]),
+  MxPollEvents: mk(MxString, "MxPollEvents", ["str"]),
+  MxSendE2EEMessage: mk(MxString, "MxSendE2EEMessage", ["str"]),
+  MxSendE2EEReaction: mk(MxString, "MxSendE2EEReaction", ["str"]),
+  MxSendE2EETyping: mk(MxString, "MxSendE2EETyping", ["str"]),
+  MxEditE2EEMessage: mk(MxString, "MxEditE2EEMessage", ["str"]),
+  MxUnsendE2EEMessage: mk(MxString, "MxUnsendE2EEMessage", ["str"]),
+  MxGetDeviceData: mk(MxString, "MxGetDeviceData", ["str"]),
   // E2EE Media functions
-  MxSendE2EEImage: mk("str", "MxSendE2EEImage", ["str"]),
-  MxSendE2EEVideo: mk("str", "MxSendE2EEVideo", ["str"]),
-  MxSendE2EEAudio: mk("str", "MxSendE2EEAudio", ["str"]),
-  MxSendE2EEDocument: mk("str", "MxSendE2EEDocument", ["str"]),
-  MxSendE2EESticker: mk("str", "MxSendE2EESticker", ["str"]),
-  MxDownloadE2EEMedia: mk("str", "MxDownloadE2EEMedia", ["str"]),
+  MxSendE2EEImage: mk(MxString, "MxSendE2EEImage", ["str"]),
+  MxSendE2EEVideo: mk(MxString, "MxSendE2EEVideo", ["str"]),
+  MxSendE2EEAudio: mk(MxString, "MxSendE2EEAudio", ["str"]),
+  MxSendE2EEDocument: mk(MxString, "MxSendE2EEDocument", ["str"]),
+  MxSendE2EESticker: mk(MxString, "MxSendE2EESticker", ["str"]),
+  MxDownloadE2EEMedia: mk(MxString, "MxDownloadE2EEMedia", ["str"]),
   // Cookie and push notification functions
-  MxGetCookies: mk("str", "MxGetCookies", ["str"]),
-  MxRegisterPushNotifications: mk("str", "MxRegisterPushNotifications", ["str"])
+  MxGetCookies: mk(MxString, "MxGetCookies", ["str"]),
+  MxRegisterPushNotifications: mk(MxString, "MxRegisterPushNotifications", ["str"])
 };
 function call(fn, payload) {
   const input = JSONBigNative.stringify(payload);
