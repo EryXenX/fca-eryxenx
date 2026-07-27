@@ -40,7 +40,6 @@ function withTimeout(promise, label) {
 }
 
 let _clientPromise = null;
-let _client = null;
 
 function _dynamicImport(specifier) {
     // eslint-disable-next-line no-new-func
@@ -57,68 +56,71 @@ function _cookiesFromAppState(appState) {
     return out;
 }
 
+let _clientInstance = null;
+let _connected = false;
+
 /**
- * Returns a connected native Client, creating/connecting it on first use.
+ * Returns a connected native Client, creating it once and reusing the same
+ * instance across reconnects (same pattern as the reference stfca package).
+ * Creating a brand-new Client (and thus a brand-new native Go-side handle)
+ * on every reconnect was never releasing the old handle fast enough and
+ * leaked native memory over a multi-hour uptime — reusing the instance and
+ * just re-calling .connect() avoids that entirely.
  * @param {Array} appState fca-eryxenx's appState (from api.getAppState())
  */
 async function getClient(appState) {
-    if (_client) return _client;
+    if (_connected && _clientInstance) return _clientInstance;
     if (_clientPromise) return _clientPromise;
 
     _clientPromise = (async () => {
-        const libUrl = require("url").pathToFileURL(
-            path.join(__dirname, "lib", "index.mjs")
-        ).href;
+        if (!_clientInstance) {
+            const libUrl = require("url").pathToFileURL(
+                path.join(__dirname, "lib", "index.mjs")
+            ).href;
 
-        let mod;
-        try {
-            mod = await _dynamicImport(libUrl);
-        } catch (err) {
-            throw new Error(
-                "Native E2EE media engine failed to load (" + libUrl + "): " +
-                (err && err.message ? err.message : String(err)) +
-                "\nMake sure `koffi` and `yumi-json-bigint` are installed, and that " +
-                "native/build/messagix.{so,dll} is present for this platform."
-            );
+            let mod;
+            try {
+                mod = await _dynamicImport(libUrl);
+            } catch (err) {
+                throw new Error(
+                    "Native E2EE media engine failed to load (" + libUrl + "): " +
+                    (err && err.message ? err.message : String(err)) +
+                    "\nMake sure `koffi` and `yumi-json-bigint` are installed, and that " +
+                    "native/build/messagix.{so,dll} is present for this platform."
+                );
+            }
+
+            const cookies = _cookiesFromAppState(appState);
+            if (!cookies.c_user || !cookies.xs) {
+                throw new Error("Native E2EE media engine: c_user/xs cookies missing from appState");
+            }
+
+            _clientInstance = new mod.Client(cookies, {
+                enableE2EE: true,
+                e2eeMemoryOnly: true,
+                autoReconnect: true,
+                logLevel: "none"
+            });
+
+            _clientInstance.on("error", (err) => {
+                logger.warn("E2EE", "[native-media] " + (err && err.message ? err.message : String(err)));
+            });
+            _clientInstance.on("disconnected", () => {
+                logger.warn("E2EE", "[native-media] native client disconnected, will reconnect on next send");
+                _connected = false;
+                _clientPromise = null;
+                // NOTE: we deliberately do NOT null/dispose _clientInstance
+                // here — it's reused on the next getClient() call via
+                // client.connect() below, avoiding a second native handle.
+            });
         }
-
-        const cookies = _cookiesFromAppState(appState);
-        if (!cookies.c_user || !cookies.xs) {
-            throw new Error("Native E2EE media engine: c_user/xs cookies missing from appState");
-        }
-
-        const client = new mod.Client(cookies, {
-            enableE2EE: true,
-            e2eeMemoryOnly: true,
-            autoReconnect: true,
-            logLevel: "none"
-        });
 
         logger.info("E2EE", "[native-media] Connecting native mautrix-go client for media sends...");
-        await client.connect();
-        await client.connectE2EE();
+        await _clientInstance.connect();
+        await _clientInstance.connectE2EE();
+        _connected = true;
 
-        client.on("error", (err) => {
-            logger.warn("E2EE", "[native-media] " + (err && err.message ? err.message : String(err)));
-        });
-        client.on("disconnected", () => {
-            logger.warn("E2EE", "[native-media] native client disconnected, will reconnect on next send");
-            const staleClient = _client;
-            _client = null;
-            _clientPromise = null;
-            // Release the native (Go-side) handle for the stale connection —
-            // this is off-heap memory that Node's GC can never reclaim on its
-            // own; without this call it leaks permanently on every reconnect.
-            if (staleClient && typeof staleClient.disconnect === "function") {
-                staleClient.disconnect().catch((err) => {
-                    logger.warn("E2EE", "[native-media] failed to release stale native handle: " +
-                        (err && err.message ? err.message : String(err)));
-                });
-            }
-        });
-
-        _client = client;
-        return client;
+        return _clientInstance;
     })();
 
     try {
