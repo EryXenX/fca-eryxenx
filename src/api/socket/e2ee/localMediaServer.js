@@ -56,4 +56,4 @@ async function serveBuffer(buffer, mimeType) {
     return `http://127.0.0.1:${port}/${token}`;
 }
 
-module.exports = { serveBuffer };
+module.exports = { serveBuffer, getCacheSize: () => _cache.size };
